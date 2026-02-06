@@ -1,0 +1,37 @@
+[package]
+name = "kira-mitoqc"
+description = "Deterministic mitochondrial QC scoring for single-cell expression matrices."
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.91"
+repository = "https://github.com/ARyaskov/kira-mitoqc"
+keywords = [
+    "bioinformatics",
+    "oncology",
+    "quality-control",
+    "cell",
+    "mitochondria"
+]
+categories = [
+    "science",
+    "science::bioinformatics",
+    "command-line-utilities",
+    "algorithms"
+]
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+memmap2 = "0.9"
+sprs = "0.11"
+flate2 = "1"
+hdf5 = { version = "0.8", optional = true }
+
+[features]
+default = []
+h5ad = ["hdf5"]

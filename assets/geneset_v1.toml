@@ -1,0 +1,37 @@
+# kira-mitoqc
+# Gene-set specification v1
+# Deterministic, minimal, cross-dataset stable
+
+[metadata]
+version = "v1.0"
+description = "Minimal mitochondrial gene sets for deterministic decay profiling"
+source = "curated"
+notes = "No ML, no training, fixed composition"
+
+[mtDNA]
+# All mitochondrial-encoded genes
+complex_I   = ["MT-ND1", "MT-ND2", "MT-ND3", "MT-ND4", "MT-ND4L", "MT-ND5", "MT-ND6"]
+complex_III = ["MT-CYB"]
+complex_IV  = ["MT-CO1", "MT-CO2", "MT-CO3"]
+complex_V   = ["MT-ATP6", "MT-ATP8"]
+
+[nuclear_oxphos]
+# Minimal nuclear anchors per ETC complex
+complex_I   = ["NDUFS1", "NDUFV1"]
+complex_II  = ["SDHA"]
+complex_III = ["UQCRC1"]
+complex_IV  = ["COX4I1", "COX5A"]
+complex_V   = ["ATP5F1A"]
+
+[ros_detox]
+genes = ["SOD2", "GPX1", "GPX4", "PRDX3", "TXN2"]
+
+[mitophagy]
+genes = ["PINK1", "PRKN", "BNIP3", "BNIP3L", "FUNDC1"]
+
+[dynamics]
+fusion  = ["MFN1", "MFN2", "OPA1"]
+fission = ["DNM1L", "FIS1"]
+
+[biogenesis]
+genes = ["PPARGC1A", "TFAM", "NRF1"]

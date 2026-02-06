@@ -1,0 +1,72 @@
+# kira-mitoqc
+# Reference constants v1
+# Fixed scaling constants used to map raw proxy magnitudes to [0,1]
+
+
+[metadata]
+version = "v1.0"
+description = "Fixed reference scaling constants for proxy normalization"
+notes = "These are engineering constants; calibrate by publishing a new refs version"
+
+
+[eps]
+# Numerical stability
+value = 1e-6
+
+
+[refs]
+# Stoichiometry variance scaling
+STOICH_REF = 0.25
+
+
+# mtDNA vs nuclear uncoupling scaling
+UNCOUPLING_REF = 1.00
+
+
+# ROS response scaling
+ROS_REF = 1.00
+
+
+# Redox proxy scaling
+REDOX_REF = 1.00
+
+
+# ATP coupling scaling
+ATP_REF = 1.00
+
+
+# Mitophagy scaling
+MITO_REF = 1.00
+
+
+# Dynamics imbalance scaling (|log2(fusion/fission)|)
+DYN_REF = 1.00
+
+
+# Biogenesis signal scaling
+BIO_REF = 1.00
+
+
+[thresholds]
+# Failure-mode classification (v1 rules)
+ROS_HIGH = 0.75
+BIOENERGETICS_LOW = 0.50
+BIOENERGETICS_HIGH = 0.80
+DYNAMICS_HIGH = 0.70
+REGULATION_LOW = 0.40
+STRUCTURAL_BIO_MIN = 0.60
+STRUCTURAL_DYN_MIN = 0.60
+
+
+[normalization]
+# v1 recommended normalization assumptions
+# tool may detect and warn if input seems incompatible
+log1p = true
+expression_unit = "log1p_cpm_or_tpm"
+
+
+[qc]
+# Minimal gene presence requirements (counts of genes found)
+min_mtdna_genes_found = 8
+min_nuclear_oxphos_found = 4
+min_ros_genes_found = 3

@@ -1,0 +1,52 @@
+# kira-mitoqc
+# Weights specification v1
+# Deterministic, fixed. No training.
+
+
+[metadata]
+version = "v1.0"
+description = "Fixed weights for proxy aggregation and global decay score"
+notes = "Weights sum to 1 within each axis; global weights sum to 1"
+
+
+# Axis weights: each axis aggregates several proxies.
+# Constraint: within each [axis.*] group, sum(weights) == 1.0
+
+
+[axis.bioenergetics]
+ETC_stoichiometry_loss = 0.40
+mtDNA_expression_uncoupling = 0.35
+ATP_coupling_loss = 0.25
+
+
+[axis.ros]
+ROS_response_overdrive = 0.60
+NADH_imbalance = 0.40
+
+
+[axis.dynamics]
+dynamics_imbalance = 0.60
+mitophagy_excess = 0.40
+
+
+[axis.regulation]
+biogenesis_failure = 1.00
+
+
+# Global weights: DecayScore aggregates the four axes.
+# Constraint: sum == 1.0
+
+
+[global]
+bioenergetics = 0.35
+ros = 0.30
+dynamics = 0.20
+regulation = 0.15
+
+
+# Optional: explainability selection rules
+[explainability]
+# Number of drivers to emit per profile
+max_drivers = 8
+# Minimum absolute contribution to include in drivers list
+min_abs_contribution = 0.03

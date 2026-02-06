@@ -1,0 +1,29 @@
+[axis.bioenergetics]
+ETC_stoichiometry_loss = 0.32
+mtDNA_expression_uncoupling = 0.28
+ATP_coupling_loss = 0.20
+mtDNA_copy_number_instability = 0.10
+mtDNA_heteroplasmy_burden = 0.10
+
+[axis.ros]
+ROS_response_overdrive = 0.60
+NADH_imbalance = 0.40
+
+[axis.dynamics]
+dynamics_imbalance = 0.60
+mitophagy_excess = 0.40
+
+[axis.regulation]
+biogenesis_failure = 0.70
+mtDNA_copy_number_instability = 0.15
+mtDNA_heteroplasmy_burden = 0.15
+
+[global]
+bioenergetics = 0.35
+ros = 0.30
+dynamics = 0.20
+regulation = 0.15
+
+[explainability]
+max_drivers = 8
+min_abs_contribution = 0.03

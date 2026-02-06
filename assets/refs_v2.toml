@@ -1,0 +1,10 @@
+[refs_v2]
+CN_REF = 1.0
+HET_REF = 1.0
+DEL_REF = 1.0
+PROT_STOICH_REF = 1.0
+PROT_ATP_REF = 1.0
+
+[mixing]
+alpha_rna_protein_stoich = 0.6
+alpha_rna_protein_atp = 0.6
