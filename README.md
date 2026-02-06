@@ -8,6 +8,24 @@ Deterministic mitochondrial QC scoring for single-cell expression matrices. This
 - Optional: HDF5 library for H5AD input support (`--features h5ad`)
   - macOS: `brew install hdf5`
 
+
+## Installation
+
+Install from [crates.io::kira-mitoqc](https://crates.io/crates/kira-mitoqc) (Rust 1.91+ / Windows / Linux / macOS):
+
+```bash
+cargo install kira-mitoqc
+```
+
+Or
+
+Build from source (Rust 1.91+):
+
+```bash
+cargo build --release
+```
+
+
 ## Layout
 
 - `assets/` contains the versioned TOML configs (`geneset_v1.toml`, `weights_v1.toml`, `refs_v1.toml`).
