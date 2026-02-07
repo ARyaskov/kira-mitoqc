@@ -8,7 +8,7 @@
 //!     version: u32;          // 1
 //!     genes: u32;            // number of genes
 //!     samples: u32;          // number of samples
-//!     flags: u32;            // reserved (0)
+//!     flags: u32;            // cache metadata (mode in low 8 bits)
 //! }
 //! ```
 //!
@@ -27,6 +27,36 @@ use crate::data::ExpressionSoA;
 const MAGIC: &[u8; 8] = b"KIRAMTX\0";
 const VERSION: u32 = 1;
 const HEADER_LEN: usize = 8 + 4 + 4 + 4 + 4;
+const MODE_MASK: u32 = 0xFF;
+
+/// Aggregation mode encoded in expression cache metadata.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum ExprCacheMode {
+    Unknown,
+    Sample,
+    Cluster,
+    Cell,
+}
+
+impl ExprCacheMode {
+    fn to_flags(self) -> u32 {
+        match self {
+            Self::Unknown => 0,
+            Self::Sample => 1,
+            Self::Cluster => 2,
+            Self::Cell => 3,
+        }
+    }
+
+    fn from_flags(flags: u32) -> Self {
+        match flags & MODE_MASK {
+            1 => Self::Sample,
+            2 => Self::Cluster,
+            3 => Self::Cell,
+            _ => Self::Unknown,
+        }
+    }
+}
 
 /// Errors related to the expression cache format.
 #[derive(Debug, Error)]
@@ -60,6 +90,7 @@ pub struct ExpressionSoAView<'a> {
     pub values: &'a [f32],
     pub genes: usize,
     pub samples: usize,
+    pub mode: ExprCacheMode,
     #[allow(dead_code)]
     mmap: Mmap,
 }
@@ -74,6 +105,15 @@ impl<'a> ExpressionSoAView<'a> {
 
 /// Write an ExpressionSoA to the binary cache format.
 pub fn write_expr_bin(path: &Path, soa: &ExpressionSoA) -> Result<(), CacheError> {
+    write_expr_bin_with_mode(path, soa, ExprCacheMode::Unknown)
+}
+
+/// Write an ExpressionSoA with aggregation mode metadata.
+pub fn write_expr_bin_with_mode(
+    path: &Path,
+    soa: &ExpressionSoA,
+    mode: ExprCacheMode,
+) -> Result<(), CacheError> {
     let mut file = File::create(path).map_err(|source| CacheError::Io {
         path: path.to_path_buf(),
         source,
@@ -117,7 +157,7 @@ pub fn write_expr_bin(path: &Path, soa: &ExpressionSoA) -> Result<(), CacheError
             path: path.to_path_buf(),
             source,
         })?;
-    file.write_all(&0u32.to_le_bytes())
+    file.write_all(&mode.to_flags().to_le_bytes())
         .map_err(|source| CacheError::Io {
             path: path.to_path_buf(),
             source,
@@ -166,7 +206,7 @@ pub fn mmap_expr_bin(path: &Path) -> Result<ExpressionSoAView<'static>, CacheErr
         });
     }
 
-    let version = u32::from_le_bytes(header[8..12].try_into().unwrap());
+    let version = read_u32_le(header, 8);
     if version != VERSION {
         return Err(CacheError::UnsupportedVersion {
             path: path.to_path_buf(),
@@ -174,8 +214,9 @@ pub fn mmap_expr_bin(path: &Path) -> Result<ExpressionSoAView<'static>, CacheErr
         });
     }
 
-    let genes = u32::from_le_bytes(header[12..16].try_into().unwrap()) as usize;
-    let samples = u32::from_le_bytes(header[16..20].try_into().unwrap()) as usize;
+    let genes = read_u32_le(header, 12) as usize;
+    let samples = read_u32_le(header, 16) as usize;
+    let mode = ExprCacheMode::from_flags(read_u32_le(header, 20));
 
     let values_len = genes
         .checked_mul(samples)
@@ -204,6 +245,7 @@ pub fn mmap_expr_bin(path: &Path) -> Result<ExpressionSoAView<'static>, CacheErr
         values: values_static,
         genes,
         samples,
+        mode,
         mmap,
     })
 }
@@ -211,4 +253,12 @@ pub fn mmap_expr_bin(path: &Path) -> Result<ExpressionSoAView<'static>, CacheErr
 fn bytemuck_cast_slice(values: &[f32]) -> &[u8] {
     let byte_len = values.len() * std::mem::size_of::<f32>();
     unsafe { std::slice::from_raw_parts(values.as_ptr() as *const u8, byte_len) }
+}
+
+#[inline]
+fn read_u32_le(buf: &[u8], offset: usize) -> u32 {
+    let bytes = buf[offset..offset + 4]
+        .as_array::<4>()
+        .expect("validated header width");
+    u32::from_le_bytes(*bytes)
 }

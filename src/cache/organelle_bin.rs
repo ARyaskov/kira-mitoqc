@@ -492,12 +492,9 @@ fn format_error(path: &Path, message: &str) -> OrganelleCacheError {
 }
 
 fn align_to(value: usize, alignment: usize) -> usize {
-    let rem = value % alignment;
-    if rem == 0 {
-        value
-    } else {
-        value + (alignment - rem)
-    }
+    value
+        .checked_next_multiple_of(alignment)
+        .expect("alignment overflow")
 }
 
 fn write_u16(buf: &mut [u8], offset: usize, value: u16) {
@@ -513,15 +510,24 @@ fn write_u64(buf: &mut [u8], offset: usize, value: u64) {
 }
 
 fn read_u16(buf: &[u8], offset: usize) -> u16 {
-    u16::from_le_bytes(buf[offset..offset + 2].try_into().unwrap())
+    let bytes = buf[offset..offset + 2]
+        .as_array::<2>()
+        .expect("validated header bounds");
+    u16::from_le_bytes(*bytes)
 }
 
 fn read_u32(buf: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes(buf[offset..offset + 4].try_into().unwrap())
+    let bytes = buf[offset..offset + 4]
+        .as_array::<4>()
+        .expect("validated header bounds");
+    u32::from_le_bytes(*bytes)
 }
 
 fn read_u64(buf: &[u8], offset: usize) -> u64 {
-    u64::from_le_bytes(buf[offset..offset + 8].try_into().unwrap())
+    let bytes = buf[offset..offset + 8]
+        .as_array::<8>()
+        .expect("validated header bounds");
+    u64::from_le_bytes(*bytes)
 }
 
 fn write_u64_from_usize_iter<I: Iterator<Item = usize>>(

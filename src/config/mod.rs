@@ -28,7 +28,15 @@ pub struct ConfigV1 {
 impl ConfigV1 {
     /// Load geneset, weights, and refs from a directory containing TOML assets.
     pub fn load_from_assets_dir(path: &Path) -> Result<Self, ConfigError> {
-        let geneset_path = path.join("geneset_v1.toml");
+        Self::load_from_assets_dir_with_geneset(path, "geneset_v1.toml")
+    }
+
+    /// Load geneset, weights, and refs from a directory with a specific geneset file.
+    pub fn load_from_assets_dir_with_geneset(
+        path: &Path,
+        geneset_filename: &str,
+    ) -> Result<Self, ConfigError> {
+        let geneset_path = path.join(geneset_filename);
         let weights_path = path.join("weights_v1.toml");
         let refs_path = path.join("refs_v1.toml");
 

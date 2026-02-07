@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use kira_mitoqc::cache::{mmap_expr_bin, mmap_organelle_bin, write_expr_bin};
+use kira_mitoqc::cache::{
+    ExprCacheMode, mmap_expr_bin, mmap_organelle_bin, write_expr_bin_with_mode,
+};
 use kira_mitoqc::classify::classify_v1;
 use kira_mitoqc::compute::compute_primitives;
 use kira_mitoqc::config::ConfigV1;
@@ -17,8 +19,9 @@ use kira_mitoqc::io::mtx::{
 };
 use kira_mitoqc::output::v2::assemble_profiles_v2;
 use kira_mitoqc::output::{
-    profile::assemble_profiles_v1, write_axes_tsv, write_decay_tsv, write_json, write_json_v2,
-    write_proxies_tsv,
+    pipeline_contract::{write_mito_metrics_tsv, write_pipeline_step_json, write_summary_json},
+    profile::assemble_profiles_v1,
+    write_axes_tsv, write_decay_tsv, write_json, write_json_v2, write_proxies_tsv,
 };
 use kira_mitoqc::proxy::{OptionalOmicsInputs, compute_proxies_v1, compute_proxies_v2};
 use kira_mitoqc::score::{compute_axes_v2, compute_decay_v2, score_profile_v1};
@@ -131,11 +134,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 mode: args.mode,
             };
 
-            let config = ConfigV1::load_from_assets_dir(&args.assets)?;
-            let geneset = &config.geneset;
-
             let cache_dir = args.cache.as_ref().unwrap_or(&args.out);
             let cache_path = cache_dir.join("expr.bin");
+            let requested_cache_mode = cache_mode_from_input_mode(args.mode);
 
             let gene_symbol_col = args.gene_symbol_col.map(|v| v.saturating_sub(1));
 
@@ -146,20 +147,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map(|ext| ext.eq_ignore_ascii_case("h5ad"))
                 .unwrap_or(false);
 
-            let (features, barcodes, view) = if cache_path.exists() {
+            let mut cached_result: Option<(
+                Vec<String>,
+                Vec<String>,
+                kira_mitoqc::cache::ExpressionSoAView<'static>,
+                ConfigV1,
+            )> = None;
+            if cache_path.exists() {
                 let (features, barcodes) = if is_h5ad {
                     load_h5ad_metadata_guarded(&args.input, args.gene_symbol_key.as_deref())?
                 } else {
                     load_mtx_metadata(&args.input, gene_symbol_col)?
                 };
+                let config = load_config_autodetect(&args.assets, &features)?;
                 let view = mmap_expr_bin(&cache_path)?;
-                info!(path = ?cache_path, "using cached expression");
-                info!(
-                    genes = view.genes,
-                    samples = view.samples,
-                    "Mapped expression cache"
-                );
-                (features, barcodes, view)
+                if view.mode == requested_cache_mode {
+                    info!(path = ?cache_path, mode = ?view.mode, "using cached expression");
+                    info!(
+                        genes = view.genes,
+                        samples = view.samples,
+                        "Mapped expression cache"
+                    );
+                    cached_result = Some((features, barcodes, view, config));
+                } else {
+                    info!(
+                        path = ?cache_path,
+                        cached_mode = ?view.mode,
+                        requested_mode = ?requested_cache_mode,
+                        "cache mode mismatch, rebuilding expression cache"
+                    );
+                }
+            }
+
+            let (features, barcodes, view, config) = if let Some(cached) = cached_result {
+                cached
             } else {
                 info!(path = ?cache_path, "building expression cache");
                 let (matrix, features, barcodes) = if is_h5ad {
@@ -230,6 +251,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         (mtx.matrix, mtx.features, mtx.barcodes)
                     }
                 };
+
+                let config = load_config_autodetect(&args.assets, &features)?;
+                let geneset = &config.geneset;
 
                 let gene_index = GeneIndex::try_from_feature_list(&features)?;
                 let resolved = resolve_all_genesets(&gene_index, geneset);
@@ -314,12 +338,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
 
                 std::fs::create_dir_all(cache_dir)?;
-                write_expr_bin(&cache_path, &prepared.soa)?;
-                info!(path = ?cache_path, "Wrote expression cache");
+                write_expr_bin_with_mode(&cache_path, &prepared.soa, requested_cache_mode)?;
+                info!(
+                    path = ?cache_path,
+                    mode = ?requested_cache_mode,
+                    "Wrote expression cache"
+                );
 
                 let view = mmap_expr_bin(&cache_path)?;
-                (features, barcodes, view)
+                (features, barcodes, view, config)
             };
+            let geneset = &config.geneset;
 
             let gene_index = GeneIndex::try_from_feature_list(&features)?;
             let resolved = resolve_all_genesets(&gene_index, geneset);
@@ -377,9 +406,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             info!(path = ?args.out, "Writing outputs");
             write_json(&args.out, &profiles)?;
-            write_axes_tsv(&args.out, &scored.axes)?;
+            write_axes_tsv(&args.out, &barcodes, &scored.axes)?;
             write_decay_tsv(&args.out, &scored.decay)?;
             write_proxies_tsv(&args.out, &proxies)?;
+
+            if args.run_mode == RunMode::Pipeline {
+                let shared_cache_name = if is_h5ad {
+                    "kira-organelle.bin".to_string()
+                } else {
+                    discover_dataset_files(&args.input)
+                        .map(|d| resolve_shared_cache_filename(d.prefix.as_deref()).to_string())
+                        .unwrap_or_else(|_| "kira-organelle.bin".to_string())
+                };
+
+                write_summary_json(&args.out, &profiles)?;
+                write_mito_metrics_tsv(&args.out, &barcodes, &profiles)?;
+                write_pipeline_step_json(&args.out, &shared_cache_name)?;
+            }
 
             if args.version == RunVersion::V2 {
                 info!("Computing v2 proxies and axes");
@@ -406,6 +449,82 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+fn load_config_autodetect(
+    assets_dir: &std::path::Path,
+    features: &[String],
+) -> Result<ConfigV1, Box<dyn std::error::Error>> {
+    let human = ConfigV1::load_from_assets_dir_with_geneset(assets_dir, "geneset_v1.toml")?;
+    let mouse = ConfigV1::load_from_assets_dir_with_geneset(assets_dir, "geneset_mouse_v1.toml")?;
+
+    let human_hits = geneset_overlap_hits(features, &human.geneset);
+    let mouse_hits = geneset_overlap_hits(features, &mouse.geneset);
+
+    if mouse_hits > human_hits {
+        info!(
+            geneset = "geneset_mouse_v1.toml",
+            human_hits, mouse_hits, "Selected geneset"
+        );
+        Ok(mouse)
+    } else {
+        info!(
+            geneset = "geneset_v1.toml",
+            human_hits, mouse_hits, "Selected geneset"
+        );
+        Ok(human)
+    }
+}
+
+fn cache_mode_from_input_mode(mode: InputMode) -> ExprCacheMode {
+    match mode {
+        InputMode::Sample => ExprCacheMode::Sample,
+        InputMode::Cluster => ExprCacheMode::Cluster,
+        InputMode::Cell => ExprCacheMode::Cell,
+    }
+}
+
+fn geneset_overlap_hits(features: &[String], geneset: &kira_mitoqc::core::types::GeneSet) -> usize {
+    let feature_set: std::collections::BTreeSet<&str> =
+        features.iter().map(std::string::String::as_str).collect();
+
+    let mut hit_count = 0usize;
+    for gene in geneset.all_mtdna() {
+        if feature_set.contains(gene) {
+            hit_count += 1;
+        }
+    }
+    for gene in geneset.all_nuclear_oxphos() {
+        if feature_set.contains(gene) {
+            hit_count += 1;
+        }
+    }
+    for gene in &geneset.ros_detox_genes {
+        if feature_set.contains(gene.as_str()) {
+            hit_count += 1;
+        }
+    }
+    for gene in &geneset.mitophagy_genes {
+        if feature_set.contains(gene.as_str()) {
+            hit_count += 1;
+        }
+    }
+    for gene in &geneset.dynamics_fusion {
+        if feature_set.contains(gene.as_str()) {
+            hit_count += 1;
+        }
+    }
+    for gene in &geneset.dynamics_fission {
+        if feature_set.contains(gene.as_str()) {
+            hit_count += 1;
+        }
+    }
+    for gene in &geneset.biogenesis_genes {
+        if feature_set.contains(gene.as_str()) {
+            hit_count += 1;
+        }
+    }
+    hit_count
 }
 
 fn read_vec_file(path: Option<&PathBuf>) -> Result<Option<Vec<f32>>, Box<dyn std::error::Error>> {
@@ -545,5 +664,27 @@ mod tests {
     #[test]
     fn clap_schema_is_valid() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn geneset_overlap_prefers_mouse_symbols() {
+        let human = ConfigV1::load_from_assets_dir_with_geneset(
+            std::path::Path::new("assets"),
+            "geneset_v1.toml",
+        )
+        .expect("human config");
+        let mouse = ConfigV1::load_from_assets_dir_with_geneset(
+            std::path::Path::new("assets"),
+            "geneset_mouse_v1.toml",
+        )
+        .expect("mouse config");
+        let features = vec![
+            "mt-Nd1".to_string(),
+            "Atp5f1a".to_string(),
+            "Sod2".to_string(),
+        ];
+        let h = geneset_overlap_hits(&features, &human.geneset);
+        let m = geneset_overlap_hits(&features, &mouse.geneset);
+        assert!(m > h);
     }
 }

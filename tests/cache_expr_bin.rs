@@ -2,7 +2,9 @@ use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
 
-use kira_mitoqc::cache::{CacheError, mmap_expr_bin, write_expr_bin};
+use kira_mitoqc::cache::{
+    CacheError, ExprCacheMode, mmap_expr_bin, write_expr_bin, write_expr_bin_with_mode,
+};
 use kira_mitoqc::data::ExpressionSoA;
 
 fn temp_path(name: &str) -> PathBuf {
@@ -64,4 +66,32 @@ fn size_mismatch_is_detected() {
         CacheError::SizeMismatch { .. } => {}
         _ => panic!("unexpected error: {err:?}"),
     }
+}
+
+#[test]
+fn mode_metadata_roundtrip() {
+    let soa = ExpressionSoA {
+        values: vec![1.0, 2.0, 3.0, 4.0],
+        genes: 2,
+        samples: 2,
+    };
+    let path = temp_path("mode_roundtrip");
+    write_expr_bin_with_mode(&path, &soa, ExprCacheMode::Cell).expect("write cache");
+
+    let view = mmap_expr_bin(&path).expect("mmap cache");
+    assert_eq!(view.mode, ExprCacheMode::Cell);
+}
+
+#[test]
+fn legacy_writer_keeps_unknown_mode() {
+    let soa = ExpressionSoA {
+        values: vec![1.0, 2.0, 3.0, 4.0],
+        genes: 2,
+        samples: 2,
+    };
+    let path = temp_path("unknown_mode");
+    write_expr_bin(&path, &soa).expect("write cache");
+
+    let view = mmap_expr_bin(&path).expect("mmap cache");
+    assert_eq!(view.mode, ExprCacheMode::Unknown);
 }

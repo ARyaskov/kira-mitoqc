@@ -1,0 +1,34 @@
+# kira-mitoqc
+# Mouse gene-set specification v1
+
+[metadata]
+version = "v1.0-mouse"
+description = "Minimal mouse mitochondrial gene sets for deterministic decay profiling"
+source = "curated"
+notes = "Mus musculus symbols; fixed composition"
+
+[mtDNA]
+complex_I   = ["mt-Nd1", "mt-Nd2", "mt-Nd3", "mt-Nd4", "mt-Nd4l", "mt-Nd5", "mt-Nd6"]
+complex_III = ["mt-Cytb"]
+complex_IV  = ["mt-Co1", "mt-Co2", "mt-Co3"]
+complex_V   = ["mt-Atp6", "mt-Atp8"]
+
+[nuclear_oxphos]
+complex_I   = ["Ndufs1", "Ndufv1"]
+complex_II  = ["Sdha"]
+complex_III = ["Uqcrc1"]
+complex_IV  = ["Cox4i1", "Cox5a"]
+complex_V   = ["Atp5f1a"]
+
+[ros_detox]
+genes = ["Sod2", "Gpx1", "Gpx4", "Prdx3", "Txn2"]
+
+[mitophagy]
+genes = ["Pink1", "Prkn", "Bnip3", "Bnip3l", "Fundc1"]
+
+[dynamics]
+fusion  = ["Mfn1", "Mfn2", "Opa1"]
+fission = ["Dnm1l", "Fis1"]
+
+[biogenesis]
+genes = ["Ppargc1a", "Tfam", "Nrf1"]

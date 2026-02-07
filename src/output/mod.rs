@@ -10,6 +10,7 @@ use crate::core::types::{ProxyKey, ProxyScores};
 use crate::output::profile::MitoProfileV1;
 use crate::score::{AxisScoresVec, DecayScoreVec};
 
+pub mod pipeline_contract;
 pub mod profile;
 pub mod v2;
 
@@ -52,7 +53,11 @@ pub fn write_json(out_dir: &Path, profiles: &[MitoProfileV1]) -> Result<(), Outp
 }
 
 /// Write axis scores to `axes.tsv`.
-pub fn write_axes_tsv(out_dir: &Path, axes: &AxisScoresVec) -> Result<(), OutputError> {
+pub fn write_axes_tsv(
+    out_dir: &Path,
+    barcodes: &[String],
+    axes: &AxisScoresVec,
+) -> Result<(), OutputError> {
     fs::create_dir_all(out_dir).map_err(|source| OutputError::CreateDir {
         path: out_dir.to_path_buf(),
         source,
@@ -63,7 +68,7 @@ pub fn write_axes_tsv(out_dir: &Path, axes: &AxisScoresVec) -> Result<(), Output
         source,
     })?;
 
-    writeln!(file, "sample\tbioenergetics\tros\tdynamics\tregulation").map_err(|source| {
+    writeln!(file, "cell_id\tbioenergetics\tros\tdynamics\tregulation").map_err(|source| {
         OutputError::WriteFile {
             path: path.clone(),
             source,
@@ -74,7 +79,7 @@ pub fn write_axes_tsv(out_dir: &Path, axes: &AxisScoresVec) -> Result<(), Output
         writeln!(
             file,
             "{}\t{:.6}\t{:.6}\t{:.6}\t{:.6}",
-            i, axes.bioenergetics[i], axes.ros[i], axes.dynamics[i], axes.regulation[i]
+            barcodes[i], axes.bioenergetics[i], axes.ros[i], axes.dynamics[i], axes.regulation[i]
         )
         .map_err(|source| OutputError::WriteFile {
             path: path.clone(),

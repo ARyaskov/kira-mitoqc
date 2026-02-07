@@ -88,16 +88,25 @@ fn header_and_crc_are_valid() {
     assert!(bytes.len() >= 256);
     let header = &bytes[..256];
     assert_eq!(&header[0..4], b"KORG");
-    assert_eq!(u16::from_le_bytes(header[4..6].try_into().unwrap()), 1);
-    assert_eq!(u16::from_le_bytes(header[6..8].try_into().unwrap()), 0);
     assert_eq!(
-        u32::from_le_bytes(header[8..12].try_into().unwrap()),
+        u16::from_le_bytes(*header[4..6].as_array::<2>().unwrap()),
+        1
+    );
+    assert_eq!(
+        u16::from_le_bytes(*header[6..8].as_array::<2>().unwrap()),
+        0
+    );
+    assert_eq!(
+        u32::from_le_bytes(*header[8..12].as_array::<4>().unwrap()),
         0x1234_5678
     );
-    assert_eq!(u32::from_le_bytes(header[12..16].try_into().unwrap()), 256);
-    let file_bytes = u64::from_le_bytes(header[112..120].try_into().unwrap()) as usize;
+    assert_eq!(
+        u32::from_le_bytes(*header[12..16].as_array::<4>().unwrap()),
+        256
+    );
+    let file_bytes = u64::from_le_bytes(*header[112..120].as_array::<8>().unwrap()) as usize;
     assert_eq!(file_bytes, bytes.len());
-    let stored_crc = u64::from_le_bytes(header[120..128].try_into().unwrap());
+    let stored_crc = u64::from_le_bytes(*header[120..128].as_array::<8>().unwrap());
     let mut crc_header = [0u8; 256];
     crc_header.copy_from_slice(header);
     crc_header[120..128].fill(0);

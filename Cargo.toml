@@ -1,9 +1,9 @@
 [package]
 name = "kira-mitoqc"
 description = "Deterministic mitochondrial QC scoring for single-cell expression matrices."
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
-rust-version = "1.91"
+rust-version = "1.95"
 license = "MIT"
 repository = "https://github.com/ARyaskov/kira-mitoqc"
 keywords = [

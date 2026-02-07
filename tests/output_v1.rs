@@ -112,7 +112,8 @@ fn tsv_headers_are_stable() {
     };
     let proxies = proxy_scores_fixture();
 
-    write_axes_tsv(&dir, &axes).expect("axes tsv");
+    let barcodes = vec!["cellA".to_string()];
+    write_axes_tsv(&dir, &barcodes, &axes).expect("axes tsv");
     write_decay_tsv(&dir, &decay).expect("decay tsv");
     write_proxies_tsv(&dir, &proxies).expect("proxies tsv");
 
@@ -125,7 +126,7 @@ fn tsv_headers_are_stable() {
             .lines()
             .next()
             .unwrap()
-            .starts_with("sample\tbioenergetics\tros\tdynamics\tregulation")
+            .starts_with("cell_id\tbioenergetics\tros\tdynamics\tregulation")
     );
     assert!(
         decay_header

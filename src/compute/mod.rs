@@ -95,15 +95,8 @@ impl GeneOffsets {
         mtdna_all.extend(complex_iv.iter().copied());
         mtdna_all.extend(complex_v.iter().copied());
 
-        let mut atp_mt = Vec::new();
-        if let Some(idx) = index_map.get("MT-ATP6") {
-            atp_mt.push(*idx);
-        }
-        if let Some(idx) = index_map.get("MT-ATP8") {
-            atp_mt.push(*idx);
-        }
-
-        let atp_nu = index_map.get("ATP5F1A").copied().unwrap_or(usize::MAX);
+        let atp_mt: Vec<usize> = complex_v.iter().copied().take(2).collect();
+        let atp_nu = nuclear_offsets.first().copied().unwrap_or(usize::MAX);
 
         Self {
             mtdna_all,

@@ -4,14 +4,14 @@ Deterministic mitochondrial QC scoring for single-cell expression matrices. This
 
 ## Requirements
 
-- Rust 1.91+ (Edition 2024)
+- Rust 1.95+ (Edition 2024)
 - Optional: HDF5 library for H5AD input support (`--features h5ad`)
   - macOS: `brew install hdf5`
 
 
 ## Installation
 
-Install from [crates.io::kira-mitoqc](https://crates.io/crates/kira-mitoqc) (Rust 1.91+ / Windows / Linux / macOS):
+Install from [crates.io::kira-mitoqc](https://crates.io/crates/kira-mitoqc) (Rust 1.95+ / Windows / Linux / macOS):
 
 ```bash
 cargo install kira-mitoqc
@@ -19,7 +19,7 @@ cargo install kira-mitoqc
 
 Or
 
-Build from source (Rust 1.91+):
+Build from source (Rust 1.95+):
 
 ```bash
 cargo build --release
@@ -29,6 +29,7 @@ cargo build --release
 ## Layout
 
 - `assets/` contains the versioned TOML configs (`geneset_v1.toml`, `weights_v1.toml`, `refs_v1.toml`).
+- `assets/` also includes `geneset_mouse_v1.toml` for mouse datasets.
 - `src/` contains the CLI and library modules.
 
 ## CLI
@@ -61,3 +62,6 @@ After writing, it reopens this cache via mmap and continues downstream computati
 
 `CACHE_FILE.md` is the canonical format specification for this shared cache.
 
+Geneset selection:
+- `kira-mitoqc` auto-detects human vs mouse geneset from input feature symbol overlap.
+- It logs the selected geneset at run start (`geneset_v1.toml` or `geneset_mouse_v1.toml`).
