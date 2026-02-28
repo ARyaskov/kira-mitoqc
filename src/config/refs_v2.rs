@@ -7,6 +7,9 @@ use serde::Deserialize;
 
 use crate::config::ConfigError;
 
+const EMBEDDED_REFS_V2: &str =
+    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/refs_v2.toml"));
+
 /// v2 reference constants.
 #[derive(Debug, Clone, Deserialize)]
 pub struct RefsV2Consts {
@@ -40,6 +43,13 @@ pub fn load_refs_v2(path: &Path) -> Result<RefsV2, ConfigError> {
     })?;
     toml::from_str(&contents).map_err(|source| ConfigError::Toml {
         path: path.to_path_buf(),
+        source,
+    })
+}
+
+pub fn load_refs_v2_embedded() -> Result<RefsV2, ConfigError> {
+    toml::from_str(EMBEDDED_REFS_V2).map_err(|source| ConfigError::Toml {
+        path: std::path::PathBuf::from("embedded://refs_v2.toml"),
         source,
     })
 }

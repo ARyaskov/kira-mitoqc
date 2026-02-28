@@ -8,6 +8,11 @@ use serde::Deserialize;
 use crate::config::ConfigError;
 use crate::util::numeric::approx_eq;
 
+const EMBEDDED_WEIGHTS_V2: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/assets/weights_v2.toml"
+));
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct AxisBioenergeticsV2 {
     #[serde(rename = "ETC_stoichiometry_loss")]
@@ -104,6 +109,16 @@ pub fn load_weights_v2(path: &Path) -> Result<WeightsV2, ConfigError> {
         path: path.to_path_buf(),
         source,
     })?;
+    weights.validate(1e-6).map_err(ConfigError::Validation)?;
+    Ok(weights)
+}
+
+pub fn load_weights_v2_embedded() -> Result<WeightsV2, ConfigError> {
+    let weights: WeightsV2 =
+        toml::from_str(EMBEDDED_WEIGHTS_V2).map_err(|source| ConfigError::Toml {
+            path: std::path::PathBuf::from("embedded://weights_v2.toml"),
+            source,
+        })?;
     weights.validate(1e-6).map_err(ConfigError::Validation)?;
     Ok(weights)
 }

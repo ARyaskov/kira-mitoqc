@@ -17,6 +17,21 @@ use geneset::GenesetV1;
 use refs::RefsV1;
 use weights::WeightsV1;
 
+const EMBEDDED_GENESET_V1: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/assets/geneset_v1.toml"
+));
+const EMBEDDED_GENESET_MOUSE_V1: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/assets/geneset_mouse_v1.toml"
+));
+const EMBEDDED_WEIGHTS_V1: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/assets/weights_v1.toml"
+));
+const EMBEDDED_REFS_V1: &str =
+    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/refs_v1.toml"));
+
 /// Fully loaded configuration bundle for v1.
 #[derive(Debug, Clone)]
 pub struct ConfigV1 {
@@ -47,6 +62,38 @@ impl ConfigV1 {
         let geneset_v1: GenesetV1 = parse_toml(&geneset_path, &geneset_toml)?;
         let weights_v1: WeightsV1 = parse_toml(&weights_path, &weights_toml)?;
         let refs_v1: RefsV1 = parse_toml(&refs_path, &refs_toml)?;
+
+        let geneset = geneset_v1.into_geneset();
+        validate_geneset(&geneset)?;
+        weights_v1.validate(1e-6).map_err(ConfigError::Validation)?;
+
+        Ok(Self {
+            geneset,
+            weights: weights_v1,
+            refs: refs_v1,
+        })
+    }
+
+    pub fn load_embedded_with_geneset(geneset_filename: &str) -> Result<Self, ConfigError> {
+        let geneset_path = PathBuf::from(format!("embedded://{geneset_filename}"));
+        let weights_path = PathBuf::from("embedded://weights_v1.toml");
+        let refs_path = PathBuf::from("embedded://refs_v1.toml");
+
+        let geneset_toml = match geneset_filename {
+            "geneset_v1.toml" => EMBEDDED_GENESET_V1,
+            "geneset_mouse_v1.toml" => EMBEDDED_GENESET_MOUSE_V1,
+            other => {
+                return Err(ConfigError::Validation(format!(
+                    "unknown geneset asset: {other}"
+                )));
+            }
+        };
+        let weights_toml = EMBEDDED_WEIGHTS_V1;
+        let refs_toml = EMBEDDED_REFS_V1;
+
+        let geneset_v1: GenesetV1 = parse_toml(&geneset_path, geneset_toml)?;
+        let weights_v1: WeightsV1 = parse_toml(&weights_path, weights_toml)?;
+        let refs_v1: RefsV1 = parse_toml(&refs_path, refs_toml)?;
 
         let geneset = geneset_v1.into_geneset();
         validate_geneset(&geneset)?;

@@ -30,6 +30,8 @@ cargo build --release
 
 - `assets/` contains the versioned TOML configs (`geneset_v1.toml`, `weights_v1.toml`, `refs_v1.toml`).
 - `assets/` also includes `geneset_mouse_v1.toml` for mouse datasets.
+- Default assets are embedded into the binary, so if `--assets` is missing at runtime,
+  built-in TOML configs are used automatically.
 - `src/` contains the CLI and library modules.
 
 ## CLI

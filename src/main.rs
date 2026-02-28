@@ -7,8 +7,8 @@ use kira_mitoqc::cache::{
 use kira_mitoqc::classify::classify_v1_with_redox;
 use kira_mitoqc::compute::compute_primitives;
 use kira_mitoqc::config::ConfigV1;
-use kira_mitoqc::config::refs_v2::load_refs_v2;
-use kira_mitoqc::config::weights_v2::load_weights_v2;
+use kira_mitoqc::config::refs_v2::{load_refs_v2, load_refs_v2_embedded};
+use kira_mitoqc::config::weights_v2::{load_weights_v2, load_weights_v2_embedded};
 use kira_mitoqc::data::{AggregationMode, load_cluster_map, prepare_expression_with_clusters};
 use kira_mitoqc::explain::explain_v1;
 use kira_mitoqc::input::bd_rhapsody::{
@@ -569,8 +569,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             if args.version == RunVersion::V2 {
                 info!("Computing v2 proxies and axes");
-                let refs_v2 = load_refs_v2(&args.assets.join("refs_v2.toml"))?;
-                let weights_v2 = load_weights_v2(&args.assets.join("weights_v2.toml"))?;
+                let refs_v2_path = args.assets.join("refs_v2.toml");
+                let weights_v2_path = args.assets.join("weights_v2.toml");
+                let refs_v2 = if refs_v2_path.is_file() {
+                    load_refs_v2(&refs_v2_path)?
+                } else {
+                    info!(
+                        asset = "refs_v2.toml",
+                        "asset file not found; using embedded default"
+                    );
+                    load_refs_v2_embedded()?
+                };
+                let weights_v2 = if weights_v2_path.is_file() {
+                    load_weights_v2(&weights_v2_path)?
+                } else {
+                    info!(
+                        asset = "weights_v2.toml",
+                        "asset file not found; using embedded default"
+                    );
+                    load_weights_v2_embedded()?
+                };
 
                 let omics = OptionalOmicsInputs {
                     mt_dna_copy_number: read_vec_file(args.mtcopy.as_ref())?,
@@ -598,8 +616,23 @@ fn load_config_autodetect(
     assets_dir: &std::path::Path,
     features: &[String],
 ) -> Result<ConfigV1, Box<dyn std::error::Error>> {
-    let human = ConfigV1::load_from_assets_dir_with_geneset(assets_dir, "geneset_v1.toml")?;
-    let mouse = ConfigV1::load_from_assets_dir_with_geneset(assets_dir, "geneset_mouse_v1.toml")?;
+    let human_asset = assets_dir.join("geneset_v1.toml");
+    let mouse_asset = assets_dir.join("geneset_mouse_v1.toml");
+    let use_embedded = !human_asset.is_file() || !mouse_asset.is_file();
+    let human = if use_embedded {
+        info!(
+            assets = %assets_dir.display(),
+            "assets directory is incomplete; using embedded defaults"
+        );
+        ConfigV1::load_embedded_with_geneset("geneset_v1.toml")?
+    } else {
+        ConfigV1::load_from_assets_dir_with_geneset(assets_dir, "geneset_v1.toml")?
+    };
+    let mouse = if use_embedded {
+        ConfigV1::load_embedded_with_geneset("geneset_mouse_v1.toml")?
+    } else {
+        ConfigV1::load_from_assets_dir_with_geneset(assets_dir, "geneset_mouse_v1.toml")?
+    };
 
     let human_hits = geneset_overlap_hits(features, &human.geneset);
     let mouse_hits = geneset_overlap_hits(features, &mouse.geneset);
