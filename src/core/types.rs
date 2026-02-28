@@ -103,6 +103,9 @@ pub enum MitochondrialState {
     StructuralFragmentation,
     MitophagyLockedDepletion,
     CompensatedButFragile,
+    CompensatedOxidativeStress,
+    UnbufferedOxidativeStress,
+    RedoxOverload,
 }
 
 impl MitochondrialState {
@@ -114,6 +117,9 @@ impl MitochondrialState {
             Self::StructuralFragmentation => "Structural fragmentation",
             Self::MitophagyLockedDepletion => "Mitophagy-locked depletion",
             Self::CompensatedButFragile => "Compensated but fragile",
+            Self::CompensatedOxidativeStress => "CompensatedOxidativeStress",
+            Self::UnbufferedOxidativeStress => "UnbufferedOxidativeStress",
+            Self::RedoxOverload => "RedoxOverload",
         }
     }
 }

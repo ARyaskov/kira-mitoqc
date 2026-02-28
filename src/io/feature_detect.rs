@@ -1,5 +1,6 @@
 //! Gene symbol column auto-detection for features.tsv.
 
+use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Read};
 
 use tracing::{error, info};
@@ -11,6 +12,8 @@ struct ColumnStats {
     mt_hits: usize,
     oxphos_hits: usize,
     ens_hits: usize,
+    alpha_like_hits: usize,
+    unique: HashSet<String>,
 }
 
 impl ColumnStats {
@@ -20,6 +23,8 @@ impl ColumnStats {
             mt_hits: 0,
             oxphos_hits: 0,
             ens_hits: 0,
+            alpha_like_hits: 0,
+            unique: HashSet::new(),
         }
     }
 
@@ -32,6 +37,20 @@ impl ColumnStats {
         let ox_rate = self.oxphos_hits as f32 / total;
         let ens_rate = self.ens_hits as f32 / total;
         5.0 * mt_rate + 3.0 * ox_rate - 5.0 * ens_rate
+    }
+
+    fn alpha_like_rate(&self) -> f32 {
+        if self.total == 0 {
+            return 0.0;
+        }
+        self.alpha_like_hits as f32 / self.total as f32
+    }
+
+    fn unique_rate(&self) -> f32 {
+        if self.total == 0 {
+            return 0.0;
+        }
+        self.unique.len() as f32 / self.total as f32
     }
 }
 
@@ -76,6 +95,10 @@ pub fn detect_gene_symbol_column(
             if is_ensembl(value) {
                 col.ens_hits += 1;
             }
+            if is_alpha_like_symbol(value) {
+                col.alpha_like_hits += 1;
+            }
+            col.unique.insert(value.to_string());
         }
         seen += 1;
     }
@@ -96,6 +119,25 @@ pub fn detect_gene_symbol_column(
     }
 
     if best_score < 0.5 {
+        // Fallback for datasets where marker genes were prefiltered:
+        // prefer a mostly alphabetic, diverse, non-Ensembl column.
+        let fallback = stats
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.total > 0)
+            .filter(|(_, s)| s.alpha_like_rate() >= 0.7)
+            .filter(|(_, s)| s.unique_rate() >= 0.5)
+            .filter(|(_, s)| (s.ens_hits as f32 / s.total as f32) < 0.8)
+            .max_by(|(_, a), (_, b)| a.unique_rate().total_cmp(&b.unique_rate()))
+            .map(|(idx, _)| idx);
+        if let Some(idx) = fallback {
+            info!(
+                index = idx,
+                reason = "alphabetic+diverse fallback",
+                "Detected gene symbol column"
+            );
+            return Ok(idx);
+        }
         error!(
             "No gene-symbol-like column detected in features.tsv. Hint: file may contain Ensembl IDs only."
         );
@@ -163,4 +205,12 @@ fn is_ensembl(value: &str) -> bool {
     }
     let digits = &rest[1..];
     !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit())
+}
+
+fn is_alpha_like_symbol(value: &str) -> bool {
+    let has_alpha = value.chars().any(|c| c.is_ascii_alphabetic());
+    let allowed = value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.');
+    has_alpha && allowed
 }

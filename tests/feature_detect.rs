@@ -38,6 +38,14 @@ fn detect_ensembl_only_fails() {
 }
 
 #[test]
+fn detect_symbols_when_markers_absent() {
+    let data = "ENSG000001\tGENE_A\tGene Expression\nENSG000002\tGENE_B\tGene Expression\n";
+    let mut cursor = Cursor::new(data.as_bytes());
+    let col = detect_gene_symbol_column(&mut cursor, 100).expect("detect");
+    assert_eq!(col, 1);
+}
+
+#[test]
 fn manual_override_precedence() {
     let dir = std::env::temp_dir().join("kira_mitoqc_detect_override");
     std::fs::create_dir_all(&dir).unwrap();

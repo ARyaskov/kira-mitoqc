@@ -60,7 +60,7 @@ In `pipeline` mode, `kira-mitoqc` creates a shared cache file in the input direc
 
 After writing, it reopens this cache via mmap and continues downstream computation from the mmap-backed cache data.
 
-`CACHE_FILE.md` is the canonical format specification for this shared cache.
+Cache format specification: [kira-shared-sc-cache/CACHE_FILE.md](https://github.com/ARyaskov/kira-shared-sc-cache/blob/main/CACHE_FILE.md).
 
 Geneset selection:
 - `kira-mitoqc` auto-detects human vs mouse geneset from input feature symbol overlap.

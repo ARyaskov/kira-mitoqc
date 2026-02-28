@@ -4,26 +4,35 @@ use clap::Parser;
 use kira_mitoqc::cache::{
     ExprCacheMode, mmap_expr_bin, mmap_organelle_bin, write_expr_bin_with_mode,
 };
-use kira_mitoqc::classify::classify_v1;
+use kira_mitoqc::classify::classify_v1_with_redox;
 use kira_mitoqc::compute::compute_primitives;
 use kira_mitoqc::config::ConfigV1;
 use kira_mitoqc::config::refs_v2::load_refs_v2;
 use kira_mitoqc::config::weights_v2::load_weights_v2;
 use kira_mitoqc::data::{AggregationMode, load_cluster_map, prepare_expression_with_clusters};
 use kira_mitoqc::explain::explain_v1;
+use kira_mitoqc::input::bd_rhapsody::{
+    compute_mito_fraction_from_file, load_bd_rhapsody, load_bd_rhapsody_metadata,
+    resolve_bd_input_path,
+};
 use kira_mitoqc::input::{
-    GeneIndex, GeneResolutionQC, InputMode, InputSpec, resolve_all_genesets, validate_input_path,
+    DetectedInputFormat, ExpressionSource, GeneIndex, GeneResolutionQC, InputFormat, InputMode,
+    InputSpec, detect_input_format, resolve_all_genesets, validate_input_path,
 };
 use kira_mitoqc::io::mtx::{
     discover_dataset_files, load_mtx_dir, load_mtx_metadata, resolve_shared_cache_filename,
 };
 use kira_mitoqc::output::v2::assemble_profiles_v2;
 use kira_mitoqc::output::{
-    pipeline_contract::{write_mito_metrics_tsv, write_pipeline_step_json, write_summary_json},
+    pipeline_contract::{
+        write_mito_metrics_tsv, write_pipeline_step_json, write_summary_json_with_redox,
+    },
     profile::assemble_profiles_v1,
     write_axes_tsv, write_decay_tsv, write_json, write_json_v2, write_proxies_tsv,
+    write_redox_metrics_tsv,
 };
 use kira_mitoqc::proxy::{OptionalOmicsInputs, compute_proxies_v1, compute_proxies_v2};
+use kira_mitoqc::redox::compute_redox_metrics;
 use kira_mitoqc::score::{compute_axes_v2, compute_decay_v2, score_profile_v1};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -34,88 +43,96 @@ use tracing_subscriber::EnvFilter;
     version,
     about = "Deterministic mitochondrial QC scoring"
 )]
-struct Cli {
+pub struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    pub command: Commands,
 }
 
 #[derive(clap::Subcommand, Debug)]
-enum Commands {
+pub enum Commands {
     /// Run the pipeline on an input dataset (parsing not yet implemented).
     Run(RunArgs),
 }
 
 #[derive(Parser, Debug)]
-struct RunArgs {
+pub struct RunArgs {
     /// Input path (unused in stage 01).
     #[arg(long)]
-    input: PathBuf,
+    pub input: PathBuf,
 
     /// Output directory (unused in stage 01).
     #[arg(long)]
-    out: PathBuf,
+    pub out: PathBuf,
 
     /// Aggregation mode (parsed but unused in stage 01).
     #[arg(long, value_enum, default_value = "sample")]
-    mode: InputMode,
+    pub mode: InputMode,
 
     /// Assets directory containing geneset/weights/refs TOML.
     #[arg(long, default_value = "assets")]
-    assets: PathBuf,
+    pub assets: PathBuf,
 
     /// Cluster assignment file (TSV: barcode<TAB>cluster).
     #[arg(long)]
-    clusters: Option<PathBuf>,
+    pub clusters: Option<PathBuf>,
 
     /// Cache directory for expression binary.
     #[arg(long)]
-    cache: Option<PathBuf>,
+    pub cache: Option<PathBuf>,
 
     /// Pipeline version.
     #[arg(long, value_enum, default_value = "v1")]
-    version: RunVersion,
+    pub version: RunVersion,
 
     /// Optional mtDNA copy number vector (one value per line).
     #[arg(long)]
-    mtcopy: Option<PathBuf>,
+    pub mtcopy: Option<PathBuf>,
 
     /// Optional heteroplasmy vector (one value per line).
     #[arg(long)]
-    heteroplasmy: Option<PathBuf>,
+    pub heteroplasmy: Option<PathBuf>,
 
     /// Optional mtDNA deletions vector (one value per line).
     #[arg(long)]
-    mtdeletions: Option<PathBuf>,
+    pub mtdeletions: Option<PathBuf>,
 
     /// Optional proteomics ETC stoichiometry vector (one value per line).
     #[arg(long)]
-    proteomics_etc: Option<PathBuf>,
+    pub proteomics_etc: Option<PathBuf>,
 
     /// Optional proteomics ATP coupling vector (one value per line).
     #[arg(long)]
-    proteomics_atp: Option<PathBuf>,
+    pub proteomics_atp: Option<PathBuf>,
 
     /// H5AD gene symbol column in var (default: auto).
     #[arg(long)]
-    gene_symbol_key: Option<String>,
+    pub gene_symbol_key: Option<String>,
 
     /// Gene symbol column for MTX features.tsv (1-based).
     #[arg(long)]
-    gene_symbol_col: Option<usize>,
+    pub gene_symbol_col: Option<usize>,
 
     /// Execution mode.
     #[arg(long, value_enum, default_value = "standalone")]
-    run_mode: RunMode,
+    pub run_mode: RunMode,
+
+    /// Input format selector.
+    #[arg(long, value_enum, default_value = "auto")]
+    pub input_format: InputFormat,
+
+    // Enable additive redox-proxy extension stage.
+    #[arg(long, default_value_t = false)]
+    pub redox: bool,
 }
 
 #[derive(clap::ValueEnum, Debug, Copy, Clone, PartialEq, Eq)]
-enum RunVersion {
+pub enum RunVersion {
     V1,
     V2,
 }
 
 #[derive(clap::ValueEnum, Debug, Copy, Clone, PartialEq, Eq)]
-enum RunMode {
+pub enum RunMode {
     Standalone,
     Pipeline,
 }
@@ -137,6 +154,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let cache_dir = args.cache.as_ref().unwrap_or(&args.out);
             let cache_path = cache_dir.join("expr.bin");
             let requested_cache_mode = cache_mode_from_input_mode(args.mode);
+            let agg_mode = match input_spec.mode {
+                InputMode::Sample => AggregationMode::Sample,
+                InputMode::Cluster => AggregationMode::Cluster,
+                InputMode::Cell => AggregationMode::Cell,
+            };
 
             let gene_symbol_col = args.gene_symbol_col.map(|v| v.saturating_sub(1));
 
@@ -147,6 +169,54 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map(|ext| ext.eq_ignore_ascii_case("h5ad"))
                 .unwrap_or(false);
 
+            let detected_input = if is_h5ad {
+                None
+            } else {
+                Some(detect_input_format(&args.input, args.input_format)?)
+            };
+            let bd_input_path =
+                if matches!(detected_input, Some(DetectedInputFormat::BDRhapsodyDense)) {
+                    Some(resolve_bd_input_path(&args.input)?)
+                } else {
+                    None
+                };
+            let input_format_label = if is_h5ad {
+                "h5ad"
+            } else {
+                match detected_input.expect("checked above") {
+                    DetectedInputFormat::Tenx => "10x",
+                    DetectedInputFormat::BDRhapsodyDense => "bd_rhapsody",
+                }
+            };
+            let expression_source = match detected_input {
+                Some(DetectedInputFormat::BDRhapsodyDense) => {
+                    if bd_input_path
+                        .as_ref()
+                        .and_then(|p| p.file_name().and_then(|v| v.to_str()))
+                        .map(|name| {
+                            name.eq_ignore_ascii_case("raw_counts.tsv")
+                                || name.eq_ignore_ascii_case("raw_counts.tsv.gz")
+                                || name.ends_with("_raw_counts.tsv")
+                                || name.ends_with("_raw_counts.tsv.gz")
+                        })
+                        .unwrap_or(false)
+                    {
+                        ExpressionSource::RawUmiCounts
+                    } else {
+                        ExpressionSource::NormalizedExpression
+                    }
+                }
+                _ => ExpressionSource::RawUmiCounts,
+            };
+            let is_bd_rhapsody =
+                matches!(detected_input, Some(DetectedInputFormat::BDRhapsodyDense));
+            if is_bd_rhapsody {
+                info!(
+                    path = ?bd_input_path,
+                    "Detected BD Rhapsody/raw-counts dense expression format"
+                );
+            }
+
             let mut cached_result: Option<(
                 Vec<String>,
                 Vec<String>,
@@ -156,6 +226,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if cache_path.exists() {
                 let (features, barcodes) = if is_h5ad {
                     load_h5ad_metadata_guarded(&args.input, args.gene_symbol_key.as_deref())?
+                } else if is_bd_rhapsody {
+                    load_bd_rhapsody_metadata(
+                        bd_input_path
+                            .as_deref()
+                            .expect("resolved for BD Rhapsody input"),
+                    )?
                 } else {
                     load_mtx_metadata(&args.input, gene_symbol_col)?
                 };
@@ -213,24 +289,48 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "Loaded H5AD input"
                     );
                     (matrix, features, barcodes)
+                } else if is_bd_rhapsody {
+                    let bd = load_bd_rhapsody(
+                        bd_input_path
+                            .as_deref()
+                            .expect("resolved for BD Rhapsody input"),
+                    )?;
+                    info!(
+                        features = bd.features.len(),
+                        barcodes = bd.barcodes.len(),
+                        nnz = bd.matrix.nnz(),
+                        "Loaded BD Rhapsody dense input"
+                    );
+                    if args.run_mode == RunMode::Pipeline {
+                        let cache_parent = if args.input.is_dir() {
+                            args.input.clone()
+                        } else {
+                            args.input
+                                .parent()
+                                .map(|p| p.to_path_buf())
+                                .unwrap_or_else(|| PathBuf::from("."))
+                        };
+                        let shared_path = cache_parent.join("kira-organelle.bin");
+                        info!(
+                            path = ?shared_path,
+                            "Pipeline mode: reading shared cache generated by kira-organelle"
+                        );
+                        let shared = mmap_organelle_bin(&shared_path)?;
+                        let mtx = shared.to_mtx_input();
+                        (mtx.matrix, mtx.features, mtx.barcodes)
+                    } else {
+                        (bd.matrix, bd.features, bd.barcodes)
+                    }
                 } else {
                     if args.run_mode == RunMode::Pipeline {
                         let discovery = discover_dataset_files(&args.input)?;
                         let shared_name =
                             resolve_shared_cache_filename(discovery.prefix.as_deref());
                         let shared_path = discovery.input_dir.join(shared_name);
-                        info!(path = ?args.input, "Pipeline mode: loading MTX input for shared cache");
-                        let mtx = load_mtx_dir(&args.input, gene_symbol_col)?;
                         info!(
-                            rows = mtx.matrix.rows(),
-                            cols = mtx.matrix.cols(),
-                            nnz = mtx.matrix.nnz(),
-                            "Pipeline mode: MTX loaded"
+                            path = ?shared_path,
+                            "Pipeline mode: reading shared cache generated by kira-organelle"
                         );
-                        info!(path = ?shared_path, "Pipeline mode: writing shared organelle cache");
-                        kira_mitoqc::cache::write_organelle_bin(&shared_path, &mtx)?;
-                        info!(path = ?shared_path, "Wrote shared pipeline cache");
-                        info!(path = ?shared_path, "Pipeline mode: opening shared cache via mmap");
                         let shared = mmap_organelle_bin(&shared_path)?;
                         info!(
                             path = ?shared_path,
@@ -297,28 +397,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "Resolved gene sets"
                 );
 
-                let agg_mode = match input_spec.mode {
-                    InputMode::Sample => AggregationMode::Sample,
-                    InputMode::Cluster => AggregationMode::Cluster,
-                    InputMode::Cell => AggregationMode::Cell,
-                };
-
-                let cluster_map = if agg_mode == AggregationMode::Cluster {
-                    let path = args.clusters.as_ref().ok_or_else(|| {
-                        std::io::Error::new(
-                            std::io::ErrorKind::InvalidInput,
-                            "--clusters is required for cluster mode",
-                        )
-                    })?;
-                    if is_h5ad {
-                        let column = parse_h5ad_cluster_arg(path)?;
-                        Some(load_h5ad_clusters_guarded(&args.input, &column)?)
-                    } else {
-                        Some(load_cluster_map(path, &barcodes)?)
-                    }
-                } else {
-                    None
-                };
+                let cluster_map = load_cluster_map_for_mode(&args, is_h5ad, &barcodes, agg_mode)?;
 
                 let prepared = prepare_expression_with_clusters(
                     &kira_mitoqc::io::mtx::MtxInput {
@@ -380,7 +459,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
 
             info!("Computing primitives");
-            let primitives = compute_primitives(&view, &resolved);
+            let mut primitives = compute_primitives(&view, &resolved);
+            if is_bd_rhapsody {
+                let cluster_map_for_fraction =
+                    load_cluster_map_for_mode(&args, is_h5ad, &barcodes, agg_mode)?;
+                let mito_symbols: std::collections::BTreeSet<String> = geneset
+                    .all_mtdna()
+                    .into_iter()
+                    .map(|s| s.to_string())
+                    .collect();
+                let mito_fraction = compute_mito_fraction_from_file(
+                    &args.input,
+                    &mito_symbols,
+                    agg_mode,
+                    cluster_map_for_fraction.as_ref(),
+                )?;
+                if mito_fraction.len() == primitives.mtdna_mean.len() {
+                    primitives.mtdna_mean = mito_fraction;
+                    info!(
+                        expression_type = "normalized",
+                        "Applied BD Rhapsody mitochondrial fraction semantics"
+                    );
+                } else {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "BD Rhapsody mito fraction length does not match computed sample count",
+                    )
+                    .into());
+                }
+            }
 
             info!("Computing proxies");
             let proxies = compute_proxies_v1(&primitives, &resolved, &config.refs)?;
@@ -388,8 +495,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             info!("Computing axes and decay");
             let scored = score_profile_v1(&proxies, &config.weights);
 
+            info!("Computing redox extension stage");
+            let redox_metrics = if args.redox {
+                Some(compute_redox_metrics(
+                    &view,
+                    &gene_index,
+                    &scored.axes,
+                    &proxies,
+                )?)
+            } else {
+                None
+            };
+
             info!("Classifying failure modes");
-            let states = classify_v1(&scored.axes, &scored.decay, &config.refs);
+            let states = classify_v1_with_redox(
+                &scored.axes,
+                &scored.decay,
+                &config.refs,
+                redox_metrics.as_ref(),
+            );
 
             info!("Computing explainability");
             let explain = explain_v1(
@@ -401,14 +525,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
 
             info!("Assembling profiles");
-            let profiles =
+            let mut profiles =
                 assemble_profiles_v1(&states, &scored.decay, &scored.axes, &proxies, &explain);
+
+            if let Some(redox) = redox_metrics.as_ref() {
+                for i in 0..profiles.len() {
+                    if redox.low_confidence.get(i).copied().unwrap_or(false) {
+                        profiles[i].interpretation.push(
+                            "LOW_CONFIDENCE: redox proxy panel coverage is limited".to_string(),
+                        );
+                    }
+                }
+            }
 
             info!(path = ?args.out, "Writing outputs");
             write_json(&args.out, &profiles)?;
             write_axes_tsv(&args.out, &barcodes, &scored.axes)?;
             write_decay_tsv(&args.out, &scored.decay)?;
             write_proxies_tsv(&args.out, &proxies)?;
+            if let Some(redox) = redox_metrics.as_ref() {
+                write_redox_metrics_tsv(&args.out, &barcodes, redox)?;
+            }
 
             if args.run_mode == RunMode::Pipeline {
                 let shared_cache_name = if is_h5ad {
@@ -419,7 +556,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .unwrap_or_else(|_| "kira-organelle.bin".to_string())
                 };
 
-                write_summary_json(&args.out, &profiles)?;
+                write_summary_json_with_redox(
+                    &args.out,
+                    &profiles,
+                    input_format_label,
+                    expression_source,
+                    redox_metrics.as_ref(),
+                )?;
                 write_mito_metrics_tsv(&args.out, &barcodes, &profiles)?;
                 write_pipeline_step_json(&args.out, &shared_cache_name)?;
             }
@@ -484,7 +627,10 @@ fn cache_mode_from_input_mode(mode: InputMode) -> ExprCacheMode {
     }
 }
 
-fn geneset_overlap_hits(features: &[String], geneset: &kira_mitoqc::core::types::GeneSet) -> usize {
+pub fn geneset_overlap_hits(
+    features: &[String],
+    geneset: &kira_mitoqc::core::types::GeneSet,
+) -> usize {
     let feature_set: std::collections::BTreeSet<&str> =
         features.iter().map(std::string::String::as_str).collect();
 
@@ -547,6 +693,29 @@ fn read_vec_file(path: Option<&PathBuf>) -> Result<Option<Vec<f32>>, Box<dyn std
         values.push(value);
     }
     Ok(Some(values))
+}
+
+fn load_cluster_map_for_mode(
+    args: &RunArgs,
+    is_h5ad: bool,
+    barcodes: &[String],
+    agg_mode: AggregationMode,
+) -> Result<Option<kira_mitoqc::data::ClusterMap>, Box<dyn std::error::Error>> {
+    if agg_mode != AggregationMode::Cluster {
+        return Ok(None);
+    }
+    let path = args.clusters.as_ref().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "--clusters is required for cluster mode",
+        )
+    })?;
+    if is_h5ad {
+        let column = parse_h5ad_cluster_arg(path)?;
+        Ok(Some(load_h5ad_clusters_guarded(&args.input, &column)?))
+    } else {
+        Ok(Some(load_cluster_map(path, barcodes)?))
+    }
 }
 
 fn parse_h5ad_cluster_arg(path: &PathBuf) -> Result<String, Box<dyn std::error::Error>> {
@@ -631,60 +800,4 @@ fn load_h5ad_clusters_guarded(
         path: path.clone(),
     }
     .into())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use clap::CommandFactory;
-
-    #[test]
-    fn run_mode_default_is_standalone() {
-        let cli = Cli::parse_from(["kira-mitoqc", "run", "--input", "in", "--out", "out"]);
-        let Commands::Run(args) = cli.command;
-        assert_eq!(args.run_mode, RunMode::Standalone);
-    }
-
-    #[test]
-    fn run_mode_pipeline_is_accepted() {
-        let cli = Cli::parse_from([
-            "kira-mitoqc",
-            "run",
-            "--input",
-            "in",
-            "--out",
-            "out",
-            "--run-mode",
-            "pipeline",
-        ]);
-        let Commands::Run(args) = cli.command;
-        assert_eq!(args.run_mode, RunMode::Pipeline);
-    }
-
-    #[test]
-    fn clap_schema_is_valid() {
-        Cli::command().debug_assert();
-    }
-
-    #[test]
-    fn geneset_overlap_prefers_mouse_symbols() {
-        let human = ConfigV1::load_from_assets_dir_with_geneset(
-            std::path::Path::new("assets"),
-            "geneset_v1.toml",
-        )
-        .expect("human config");
-        let mouse = ConfigV1::load_from_assets_dir_with_geneset(
-            std::path::Path::new("assets"),
-            "geneset_mouse_v1.toml",
-        )
-        .expect("mouse config");
-        let features = vec![
-            "mt-Nd1".to_string(),
-            "Atp5f1a".to_string(),
-            "Sod2".to_string(),
-        ];
-        let h = geneset_overlap_hits(&features, &human.geneset);
-        let m = geneset_overlap_hits(&features, &mouse.geneset);
-        assert!(m > h);
-    }
 }

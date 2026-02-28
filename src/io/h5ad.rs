@@ -1,8 +1,11 @@
-//! H5AD loader (feature-gated).
+//! H5AD loader backed by kira-scio.
 
 use std::path::Path;
 
 use hdf5::File;
+use kira_scio::api::{Reader, ReaderOptions};
+use kira_scio::detect::DetectedFormat;
+use kira_scio::error::ErrorCode;
 use sprs::CsMat;
 
 use crate::data::aggregate::ClusterMap;
@@ -18,27 +21,29 @@ pub struct H5adInput {
 
 /// Load H5AD expression matrix and metadata.
 pub fn load_h5ad(path: &Path, gene_symbol_key: Option<&str>) -> Result<H5adInput, InputError> {
-    let file = File::open(path).map_err(|source| InputError::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
+    validate_gene_symbol_key(gene_symbol_key)?;
+    let reader = Reader::with_options(
+        path,
+        ReaderOptions {
+            force_format: Some(DetectedFormat::H5ad),
+            strict: true,
+        },
+    );
+    let canonical = reader
+        .read_all()
+        .map_err(|e| map_scio_error(path, e.code, e.message))?;
 
-    let (features, barcodes) = load_h5ad_metadata_from_file(&file, gene_symbol_key)?;
-    let matrix = load_matrix(&file)?;
-
-    if matrix.rows() != features.len() || matrix.cols() != barcodes.len() {
-        return Err(InputError::DimensionMismatch {
-            rows: matrix.rows(),
-            cols: matrix.cols(),
-            features: features.len(),
-            barcodes: barcodes.len(),
-        });
-    }
+    let matrix = CsMat::new_csc(
+        (canonical.matrix.n_genes, canonical.matrix.n_cells),
+        canonical.matrix.col_ptr,
+        canonical.matrix.row_idx,
+        canonical.matrix.values,
+    );
 
     Ok(H5adInput {
         matrix,
-        features,
-        barcodes,
+        features: canonical.metadata.gene_symbols,
+        barcodes: canonical.metadata.barcodes,
     })
 }
 
@@ -47,30 +52,18 @@ pub fn load_h5ad_metadata(
     path: &Path,
     gene_symbol_key: Option<&str>,
 ) -> Result<(Vec<String>, Vec<String>), InputError> {
-    let file = File::open(path).map_err(|source| InputError::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    load_h5ad_metadata_from_file(&file, gene_symbol_key)
-}
-
-fn load_h5ad_metadata_from_file(
-    file: &File,
-    gene_symbol_key: Option<&str>,
-) -> Result<(Vec<String>, Vec<String>), InputError> {
-    let barcodes = read_strings(file, "obs/_index")?;
-
-    let features = if let Some(key) = gene_symbol_key {
-        read_strings(file, &format!("var/{key}")).map_err(|_| InputError::InvalidGeneSymbolKey {
-            key: key.to_string(),
-        })?
-    } else if let Ok(values) = read_strings(file, "var/gene_symbols") {
-        values
-    } else {
-        read_strings(file, "var/_index")?
-    };
-
-    Ok((features, barcodes))
+    validate_gene_symbol_key(gene_symbol_key)?;
+    let reader = Reader::with_options(
+        path,
+        ReaderOptions {
+            force_format: Some(DetectedFormat::H5ad),
+            strict: true,
+        },
+    );
+    let md = reader
+        .read_metadata()
+        .map_err(|e| map_scio_error(path, e.code, e.message))?;
+    Ok((md.gene_symbols, md.barcodes))
 }
 
 /// Load cluster labels from obs/<column> and build ClusterMap.
@@ -90,6 +83,18 @@ pub fn load_h5ad_clusters(path: &Path, column: &str) -> Result<ClusterMap, Input
     Ok(build_cluster_map(&barcodes, &labels))
 }
 
+fn validate_gene_symbol_key(gene_symbol_key: Option<&str>) -> Result<(), InputError> {
+    if let Some(key) = gene_symbol_key
+        && key != "gene_symbols"
+        && key != "_index"
+    {
+        return Err(InputError::InvalidGeneSymbolKey {
+            key: key.to_string(),
+        });
+    }
+    Ok(())
+}
+
 fn read_strings(file: &File, path: &str) -> Result<Vec<String>, InputError> {
     let dataset = file
         .dataset(path)
@@ -101,139 +106,6 @@ fn read_strings(file: &File, path: &str) -> Result<Vec<String>, InputError> {
         .map_err(|_| InputError::MissingH5adDataset {
             path: path.to_string(),
         })
-}
-
-fn load_matrix(file: &File) -> Result<CsMat<f32>, InputError> {
-    if let Ok(dataset) = file.dataset("X") {
-        let shape = dataset.shape();
-        if shape.len() != 2 {
-            return Err(InputError::UnsupportedH5adMatrix {
-                layout: "dense: non-2d".to_string(),
-            });
-        }
-        let rows = shape[0] as usize;
-        let cols = shape[1] as usize;
-        let data = read_f32_vec(&dataset)?;
-        return Ok(dense_to_csr(rows, cols, &data));
-    }
-
-    let group = file
-        .group("X")
-        .map_err(|_| InputError::MissingH5adDataset {
-            path: "X".to_string(),
-        })?;
-
-    let encoding = read_attr_string(&group, "encoding-type")
-        .or_else(|_| read_attr_string(&group, "encoding_type"))
-        .unwrap_or_else(|_| "".to_string());
-
-    let data =
-        read_f32_vec(
-            &group
-                .dataset("data")
-                .map_err(|_| InputError::MissingH5adDataset {
-                    path: "X/data".to_string(),
-                })?,
-        )?;
-    let indices =
-        read_usize_vec(
-            &group
-                .dataset("indices")
-                .map_err(|_| InputError::MissingH5adDataset {
-                    path: "X/indices".to_string(),
-                })?,
-        )?;
-    let indptr =
-        read_usize_vec(
-            &group
-                .dataset("indptr")
-                .map_err(|_| InputError::MissingH5adDataset {
-                    path: "X/indptr".to_string(),
-                })?,
-        )?;
-
-    let shape = read_shape_attr(&group)?;
-    let rows = shape.0;
-    let cols = shape.1;
-
-    match encoding.as_str() {
-        "csr_matrix" => Ok(CsMat::new_csr((rows, cols), indptr, indices, data)),
-        "csc_matrix" => Ok(CsMat::new_csc((rows, cols), indptr, indices, data)),
-        _ => Err(InputError::UnsupportedH5adMatrix { layout: encoding }),
-    }
-}
-
-fn read_attr_string(group: &hdf5::Group, name: &str) -> Result<String, InputError> {
-    let attr = group
-        .attr(name)
-        .map_err(|_| InputError::MissingH5adDataset {
-            path: format!("X/@{name}"),
-        })?;
-    attr.read_scalar::<String>()
-        .map_err(|_| InputError::MissingH5adDataset {
-            path: format!("X/@{name}"),
-        })
-}
-
-fn read_shape_attr(group: &hdf5::Group) -> Result<(usize, usize), InputError> {
-    let attr = group
-        .attr("shape")
-        .map_err(|_| InputError::MissingH5adDataset {
-            path: "X/@shape".to_string(),
-        })?;
-    let shape: Vec<i64> = attr
-        .read_raw()
-        .map_err(|_| InputError::MissingH5adDataset {
-            path: "X/@shape".to_string(),
-        })?;
-    if shape.len() != 2 {
-        return Err(InputError::UnsupportedH5adMatrix {
-            layout: "shape attr length".to_string(),
-        });
-    }
-    Ok((shape[0] as usize, shape[1] as usize))
-}
-
-fn read_f32_vec(dataset: &hdf5::Dataset) -> Result<Vec<f32>, InputError> {
-    if let Ok(values) = dataset.read_raw::<f32>() {
-        return Ok(values);
-    }
-    let values = dataset
-        .read_raw::<f64>()
-        .map_err(|_| InputError::MissingH5adDataset {
-            path: dataset.name().unwrap_or("dataset").to_string(),
-        })?;
-    Ok(values.into_iter().map(|v| v as f32).collect())
-}
-
-fn read_usize_vec(dataset: &hdf5::Dataset) -> Result<Vec<usize>, InputError> {
-    if let Ok(values) = dataset.read_raw::<i64>() {
-        return Ok(values.into_iter().map(|v| v as usize).collect());
-    }
-    let values = dataset
-        .read_raw::<i32>()
-        .map_err(|_| InputError::MissingH5adDataset {
-            path: dataset.name().unwrap_or("dataset").to_string(),
-        })?;
-    Ok(values.into_iter().map(|v| v as usize).collect())
-}
-
-fn dense_to_csr(rows: usize, cols: usize, data: &[f32]) -> CsMat<f32> {
-    let mut indptr = Vec::with_capacity(rows + 1);
-    let mut indices = Vec::with_capacity(rows * cols);
-    let mut values = Vec::with_capacity(rows * cols);
-
-    indptr.push(0);
-    for r in 0..rows {
-        let row_start = r * cols;
-        for c in 0..cols {
-            indices.push(c);
-            values.push(data[row_start + c]);
-        }
-        indptr.push(values.len());
-    }
-
-    CsMat::new_csr((rows, cols), indptr, indices, values)
 }
 
 fn build_cluster_map(barcodes: &[String], labels: &[String]) -> ClusterMap {
@@ -259,5 +131,21 @@ fn build_cluster_map(barcodes: &[String], labels: &[String]) -> ClusterMap {
     ClusterMap {
         cluster_ids,
         cell_to_cluster,
+    }
+}
+
+fn map_scio_error(path: &Path, code: ErrorCode, message: String) -> InputError {
+    match code {
+        ErrorCode::InvalidInputPath => InputError::InvalidInputPath {
+            path: path.to_path_buf(),
+        },
+        ErrorCode::MissingFile => InputError::MissingFile {
+            path: path.to_path_buf(),
+        },
+        ErrorCode::FeatureDisabled => InputError::H5adFeatureNotEnabled,
+        _ => InputError::MatrixParse {
+            path: path.to_path_buf(),
+            message,
+        },
     }
 }

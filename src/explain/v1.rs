@@ -177,6 +177,15 @@ fn build_interpretation(
         MitochondrialState::CompensatedButFragile => {
             "Mitochondrial function maintained by compensatory mechanisms"
         }
+        MitochondrialState::CompensatedOxidativeStress => {
+            "Oxidative stress proxy is elevated but buffering programs remain active"
+        }
+        MitochondrialState::UnbufferedOxidativeStress => {
+            "Oxidative stress proxy exceeds current redox buffering capacity"
+        }
+        MitochondrialState::RedoxOverload => {
+            "Persistent oxidative stress proxy overload with maladaptive buffering"
+        }
     };
     lines.push(state_line.to_string());
 

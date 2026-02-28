@@ -8,6 +8,7 @@ use thiserror::Error;
 
 use crate::core::types::{ProxyKey, ProxyScores};
 use crate::output::profile::MitoProfileV1;
+use crate::redox::RedoxMetrics;
 use crate::score::{AxisScoresVec, DecayScoreVec};
 
 pub mod pipeline_contract;
@@ -199,5 +200,50 @@ pub fn write_json_v2(
     })?;
     serde_json::to_writer_pretty(file, profiles)
         .map_err(|source| OutputError::Serialize { path, source })?;
+    Ok(())
+}
+
+/// Write redox-derived proxy metrics to `mitochondrial_redox_metrics.tsv`.
+pub fn write_redox_metrics_tsv(
+    out_dir: &Path,
+    barcodes: &[String],
+    redox: &RedoxMetrics,
+) -> Result<(), OutputError> {
+    fs::create_dir_all(out_dir).map_err(|source| OutputError::CreateDir {
+        path: out_dir.to_path_buf(),
+        source,
+    })?;
+    let path = out_dir.join("mitochondrial_redox_metrics.tsv");
+    let mut file = File::create(&path).map_err(|source| OutputError::WriteFile {
+        path: path.clone(),
+        source,
+    })?;
+
+    writeln!(
+        file,
+        "cell_id\tmito_oxidative_stress_index\tredox_buffering_capacity\tmito_redox_mismatch\tmitochondrial_stress_adaptation_score\tredox_regime"
+    )
+    .map_err(|source| OutputError::WriteFile {
+        path: path.clone(),
+        source,
+    })?;
+
+    for i in 0..barcodes.len() {
+        writeln!(
+            file,
+            "{}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{}",
+            barcodes[i],
+            redox.mito_oxidative_stress_index[i],
+            redox.redox_buffering_capacity[i],
+            redox.mito_redox_mismatch[i],
+            redox.mitochondrial_stress_adaptation_score[i],
+            redox.redox_regime[i].as_str(),
+        )
+        .map_err(|source| OutputError::WriteFile {
+            path: path.clone(),
+            source,
+        })?;
+    }
+
     Ok(())
 }

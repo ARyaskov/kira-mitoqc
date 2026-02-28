@@ -2,6 +2,7 @@
 
 use crate::config::refs::RefsV1;
 use crate::core::types::MitochondrialState;
+use crate::redox::RedoxMetrics;
 use crate::score::{AxisScoresVec, DecayScoreVec};
 
 pub mod v1;
@@ -19,6 +20,16 @@ pub fn classify_v1(
     refs: &RefsV1,
 ) -> Vec<MitochondrialState> {
     v1::classify_v1(axes, decay, refs)
+}
+
+// Classify per-sample states for v1 with optional redox extension.
+pub fn classify_v1_with_redox(
+    axes: &AxisScoresVec,
+    decay: &DecayScoreVec,
+    refs: &RefsV1,
+    redox: Option<&RedoxMetrics>,
+) -> Vec<MitochondrialState> {
+    v1::classify_v1_with_redox(axes, decay, refs, redox)
 }
 
 /// Convenience helper returning a wrapped profile.

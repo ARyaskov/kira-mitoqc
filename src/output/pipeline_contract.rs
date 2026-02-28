@@ -7,13 +7,17 @@ use std::path::Path;
 
 use serde::Serialize;
 
+use crate::input::ExpressionSource;
 use crate::output::OutputError;
 use crate::output::profile::MitoProfileV1;
+use crate::redox::{RedoxMetrics, RedoxRegime};
 
 #[derive(Debug, Serialize)]
 struct SummaryInput<'a> {
     mode: &'a str,
     n_samples: usize,
+    input_format: &'a str,
+    expression_type: ExpressionSource,
 }
 
 #[derive(Debug, Serialize)]
@@ -31,12 +35,21 @@ struct SummaryAxesMedian {
 }
 
 #[derive(Debug, Serialize)]
+struct SummaryRedox {
+    regime_fractions: BTreeMap<String, f64>,
+    mean_mito_redox_mismatch: f64,
+    high_redox_overload_fraction: f64,
+}
+
+#[derive(Debug, Serialize)]
 struct SummaryJson<'a> {
     tool: &'a str,
     input: SummaryInput<'a>,
     mitochondrial_state_distribution: BTreeMap<String, f64>,
     decay: SummaryDecay,
     axes_median: SummaryAxesMedian,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    redox: Option<SummaryRedox>,
 }
 
 #[derive(Debug, Serialize)]
@@ -63,7 +76,23 @@ struct PipelineStepJson<'a> {
 }
 
 /// Write `summary.json` for pipeline aggregator ingestion.
-pub fn write_summary_json(out_dir: &Path, profiles: &[MitoProfileV1]) -> Result<(), OutputError> {
+pub fn write_summary_json(
+    out_dir: &Path,
+    profiles: &[MitoProfileV1],
+    input_format: &str,
+    expression_type: ExpressionSource,
+) -> Result<(), OutputError> {
+    write_summary_json_with_redox(out_dir, profiles, input_format, expression_type, None)
+}
+
+/// Write `summary.json` for pipeline aggregator ingestion with optional redox extension.
+pub fn write_summary_json_with_redox(
+    out_dir: &Path,
+    profiles: &[MitoProfileV1],
+    input_format: &str,
+    expression_type: ExpressionSource,
+    redox: Option<&RedoxMetrics>,
+) -> Result<(), OutputError> {
     fs::create_dir_all(out_dir).map_err(|source| OutputError::CreateDir {
         path: out_dir.to_path_buf(),
         source,
@@ -80,6 +109,8 @@ pub fn write_summary_json(out_dir: &Path, profiles: &[MitoProfileV1]) -> Result<
         input: SummaryInput {
             mode: "pipeline",
             n_samples: profiles.len(),
+            input_format,
+            expression_type,
         },
         mitochondrial_state_distribution: state_distribution(profiles),
         decay: SummaryDecay {
@@ -92,6 +123,7 @@ pub fn write_summary_json(out_dir: &Path, profiles: &[MitoProfileV1]) -> Result<
             dynamics: median(profiles.iter().map(|p| p.axes.dynamics)),
             regulation: median(profiles.iter().map(|p| p.axes.regulation)),
         },
+        redox: redox.map(build_redox_summary),
     };
 
     serde_json::to_writer_pretty(file, &summary)
@@ -198,6 +230,61 @@ fn state_distribution(profiles: &[MitoProfileV1]) -> BTreeMap<String, f64> {
         out.insert(state, round6(frac));
     }
     out
+}
+
+fn build_redox_summary(redox: &RedoxMetrics) -> SummaryRedox {
+    let n = redox.redox_regime.len() as f64;
+    let mut counts = BTreeMap::<String, usize>::new();
+    counts.insert(
+        RedoxRegime::CompensatedOxidativeStress.as_str().to_string(),
+        0,
+    );
+    counts.insert(
+        RedoxRegime::UnbufferedOxidativeStress.as_str().to_string(),
+        0,
+    );
+    counts.insert(RedoxRegime::RedoxOverload.as_str().to_string(), 0);
+
+    for regime in &redox.redox_regime {
+        match regime {
+            RedoxRegime::CompensatedOxidativeStress
+            | RedoxRegime::UnbufferedOxidativeStress
+            | RedoxRegime::RedoxOverload => {
+                *counts.entry(regime.as_str().to_string()).or_insert(0) += 1;
+            }
+            RedoxRegime::Baseline => {}
+        }
+    }
+
+    let mut regime_fractions = BTreeMap::new();
+    for (k, v) in counts {
+        let frac = if n == 0.0 { 0.0 } else { v as f64 / n };
+        regime_fractions.insert(k, round6(frac));
+    }
+
+    let mean_mismatch = if redox.mito_redox_mismatch.is_empty() {
+        0.0
+    } else {
+        let sum: f64 = redox.mito_redox_mismatch.iter().map(|v| *v as f64).sum();
+        round6(sum / redox.mito_redox_mismatch.len() as f64)
+    };
+
+    let overload_count = redox
+        .redox_regime
+        .iter()
+        .filter(|r| matches!(r, RedoxRegime::RedoxOverload))
+        .count();
+    let overload_frac = if n == 0.0 {
+        0.0
+    } else {
+        round6(overload_count as f64 / n)
+    };
+
+    SummaryRedox {
+        regime_fractions,
+        mean_mito_redox_mismatch: mean_mismatch,
+        high_redox_overload_fraction: overload_frac,
+    }
 }
 
 fn median(values: impl Iterator<Item = f32>) -> f64 {

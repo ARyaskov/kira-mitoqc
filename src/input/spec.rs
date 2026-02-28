@@ -12,6 +12,14 @@ pub enum InputMode {
     Cell,
 }
 
+/// Input matrix format.
+#[derive(Debug, Copy, Clone, ValueEnum, PartialEq, Eq)]
+pub enum InputFormat {
+    Auto,
+    Tenx,
+    BdRhapsody,
+}
+
 /// Input specification (path + mode).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InputSpec {

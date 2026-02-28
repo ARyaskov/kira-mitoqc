@@ -1,6 +1,7 @@
 //! Gene symbol to column index resolver.
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 use tracing::warn;
 
@@ -18,15 +19,20 @@ impl GeneIndex {
     /// Build from a list of feature symbols. First occurrence wins.
     pub fn from_feature_list(features: &[String]) -> Self {
         let mut map = BTreeMap::new();
+        let mut duplicates = BTreeSet::new();
         for (idx, symbol) in features.iter().enumerate() {
             if map.contains_key(symbol) {
-                warn!(
-                    symbol = symbol.as_str(),
-                    "Duplicate gene symbol in feature list"
-                );
+                duplicates.insert(symbol.clone());
                 continue;
             }
             map.insert(symbol.clone(), idx);
+        }
+        if !duplicates.is_empty() {
+            let symbols = duplicates.into_iter().collect::<Vec<_>>().join(",");
+            warn!(
+                symbols = symbols.as_str(),
+                "Duplicate gene symbols in feature list"
+            );
         }
         Self { map }
     }

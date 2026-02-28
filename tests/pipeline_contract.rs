@@ -1,6 +1,7 @@
 use std::fs;
 
 use kira_mitoqc::core::types::{AxisScores, ProxyScores};
+use kira_mitoqc::input::ExpressionSource;
 use kira_mitoqc::output::pipeline_contract::{
     write_mito_metrics_tsv, write_pipeline_step_json, write_summary_json,
 };
@@ -54,13 +55,15 @@ fn writes_summary_with_required_fields() {
     let dir = temp_dir("summary");
     let profiles = sample_profiles();
 
-    write_summary_json(&dir, &profiles).expect("summary");
+    write_summary_json(&dir, &profiles, "10x", ExpressionSource::RawUmiCounts).expect("summary");
     let value: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(dir.join("summary.json")).unwrap()).unwrap();
 
     assert_eq!(value["tool"], "kira-mitoqc");
     assert_eq!(value["input"]["mode"], "pipeline");
     assert_eq!(value["input"]["n_samples"], 2);
+    assert_eq!(value["input"]["input_format"], "10x");
+    assert_eq!(value["input"]["expression_type"], "raw_umi_counts");
     assert!(value["mitochondrial_state_distribution"].is_object());
     assert!(value["decay"]["decay_score_median"].is_number());
     assert!(value["decay"]["robustness_margin_median"].is_number());
@@ -119,9 +122,33 @@ fn summary_output_is_stable_on_repeat_write() {
     let dir = temp_dir("stable");
     let profiles = sample_profiles();
 
-    write_summary_json(&dir, &profiles).expect("first write");
+    write_summary_json(&dir, &profiles, "10x", ExpressionSource::RawUmiCounts)
+        .expect("first write");
     let first = fs::read(dir.join("summary.json")).unwrap();
-    write_summary_json(&dir, &profiles).expect("second write");
+    write_summary_json(&dir, &profiles, "10x", ExpressionSource::RawUmiCounts)
+        .expect("second write");
     let second = fs::read(dir.join("summary.json")).unwrap();
     assert_eq!(first, second);
+}
+
+#[test]
+fn summary_unchanged_when_redox_disabled() {
+    let dir = temp_dir("disabled_redox");
+    let profiles = sample_profiles();
+
+    write_summary_json(&dir, &profiles, "10x", ExpressionSource::RawUmiCounts)
+        .expect("base summary");
+    let base = fs::read(dir.join("summary.json")).expect("read base");
+
+    kira_mitoqc::output::pipeline_contract::write_summary_json_with_redox(
+        &dir,
+        &profiles,
+        "10x",
+        ExpressionSource::RawUmiCounts,
+        None,
+    )
+    .expect("summary with disabled redox");
+    let disabled = fs::read(dir.join("summary.json")).expect("read disabled");
+
+    assert_eq!(base, disabled);
 }

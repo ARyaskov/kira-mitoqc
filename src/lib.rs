@@ -12,5 +12,6 @@ pub mod input;
 pub mod io;
 pub mod output;
 pub mod proxy;
+pub mod redox;
 pub mod score;
 pub mod util;

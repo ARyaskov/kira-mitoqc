@@ -1,7 +1,7 @@
 [package]
 name = "kira-mitoqc"
 description = "Deterministic mitochondrial QC scoring for single-cell expression matrices."
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT"
@@ -32,7 +32,11 @@ memmap2 = "0.9"
 sprs = "0.11"
 flate2 = "1"
 hdf5 = { version = "0.8", optional = true }
+kira-shared-sc-cache = "0.1"
+kira-scio = "0.1"
+wide = "0.7.33"
+
 
 [features]
 default = []
-h5ad = ["hdf5"]
+h5ad = ["hdf5", "kira-scio/h5ad"]

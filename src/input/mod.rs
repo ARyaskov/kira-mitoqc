@@ -4,15 +4,18 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
+pub mod bd_rhapsody;
+pub mod detect;
 pub mod expression;
 pub mod gene_index;
 pub mod spec;
 
-pub use expression::{ExpressionContract, ExpressionUnit};
+pub use detect::{DetectedInputFormat, detect_input_format, is_probably_bd_rhapsody_dense};
+pub use expression::{ExpressionContract, ExpressionSource, ExpressionUnit};
 pub use gene_index::{
     GeneIndex, GeneResolution, GeneResolutionQC, ResolvedGeneSets, resolve_all_genesets,
 };
-pub use spec::{InputMode, InputSpec};
+pub use spec::{InputFormat, InputMode, InputSpec};
 
 /// Input-layer errors.
 #[derive(Debug, Error)]
