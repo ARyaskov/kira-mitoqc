@@ -22,6 +22,11 @@ use kira_mitoqc::input::{
 use kira_mitoqc::io::mtx::{
     discover_dataset_files, load_mtx_dir, load_mtx_metadata, resolve_shared_cache_filename,
 };
+use kira_mitoqc::metrics::metabolic_extension::aggregate::build_summary as build_metabolic_summary;
+use kira_mitoqc::metrics::metabolic_extension::panels::{
+    BIOGENESIS_PANEL, FAO_PANEL, GLYCOLYSIS_PANEL, OXPHOS_PANEL, ROS_PANEL,
+};
+use kira_mitoqc::metrics::metabolic_extension::scores::compute_metabolic_metrics;
 use kira_mitoqc::output::v2::assemble_profiles_v2;
 use kira_mitoqc::output::{
     pipeline_contract::{
@@ -237,7 +242,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 };
                 let config = load_config_autodetect(&args.assets, &features)?;
                 let view = mmap_expr_bin(&cache_path)?;
-                if view.mode == requested_cache_mode {
+                let resolved = resolve_all_genesets(
+                    &GeneIndex::try_from_feature_list(&features)?,
+                    &config.geneset,
+                );
+                let expected_genes = expected_expression_gene_count(&resolved);
+                if view.mode == requested_cache_mode && view.genes == expected_genes {
                     info!(path = ?cache_path, mode = ?view.mode, "using cached expression");
                     info!(
                         genes = view.genes,
@@ -250,7 +260,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         path = ?cache_path,
                         cached_mode = ?view.mode,
                         requested_mode = ?requested_cache_mode,
-                        "cache mode mismatch, rebuilding expression cache"
+                        cached_genes = view.genes,
+                        expected_genes,
+                        "cache mismatch, rebuilding expression cache"
                     );
                 }
             }
@@ -494,6 +506,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             info!("Computing axes and decay");
             let scored = score_profile_v1(&proxies, &config.weights);
+            let metabolic_metrics =
+                compute_metabolic_metrics(&view, &gene_index, &resolved, &scored.axes.ros);
 
             info!("Computing redox extension stage");
             let redox_metrics = if args.redox {
@@ -555,6 +569,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .map(|d| resolve_shared_cache_filename(d.prefix.as_deref()).to_string())
                         .unwrap_or_else(|_| "kira-organelle.bin".to_string())
                 };
+                let metabolic_summary = build_metabolic_summary(
+                    &metabolic_metrics,
+                    &barcodes,
+                    matches!(agg_mode, AggregationMode::Cluster),
+                );
 
                 write_summary_json_with_redox(
                     &args.out,
@@ -562,8 +581,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     input_format_label,
                     expression_source,
                     redox_metrics.as_ref(),
+                    Some(&metabolic_summary),
                 )?;
-                write_mito_metrics_tsv(&args.out, &barcodes, &profiles)?;
+                write_mito_metrics_tsv(&args.out, &barcodes, &profiles, &metabolic_metrics)?;
                 write_pipeline_step_json(&args.out, &shared_cache_name)?;
             }
 
@@ -658,6 +678,28 @@ fn cache_mode_from_input_mode(mode: InputMode) -> ExprCacheMode {
         InputMode::Cluster => ExprCacheMode::Cluster,
         InputMode::Cell => ExprCacheMode::Cell,
     }
+}
+
+fn expected_expression_gene_count(resolved: &kira_mitoqc::input::ResolvedGeneSets) -> usize {
+    resolved.mtdna_complex_i.genes.len()
+        + resolved.mtdna_complex_iii.genes.len()
+        + resolved.mtdna_complex_iv.genes.len()
+        + resolved.mtdna_complex_v.genes.len()
+        + resolved.nuclear_oxphos_complex_i.genes.len()
+        + resolved.nuclear_oxphos_complex_ii.genes.len()
+        + resolved.nuclear_oxphos_complex_iii.genes.len()
+        + resolved.nuclear_oxphos_complex_iv.genes.len()
+        + resolved.nuclear_oxphos_complex_v.genes.len()
+        + resolved.ros.genes.len()
+        + resolved.mitophagy.genes.len()
+        + resolved.fusion.genes.len()
+        + resolved.fission.genes.len()
+        + resolved.biogenesis.genes.len()
+        + OXPHOS_PANEL.len()
+        + GLYCOLYSIS_PANEL.len()
+        + FAO_PANEL.len()
+        + ROS_PANEL.len()
+        + BIOGENESIS_PANEL.len()
 }
 
 pub fn geneset_overlap_hits(

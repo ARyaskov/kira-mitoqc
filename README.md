@@ -67,3 +67,13 @@ Cache format specification: [kira-shared-sc-cache/CACHE_FILE.md](https://github.
 Geneset selection:
 - `kira-mitoqc` auto-detects human vs mouse geneset from input feature symbol overlap.
 - It logs the selected geneset at run start (`geneset_v1.toml` or `geneset_mouse_v1.toml`).
+
+## Additive mitochondrial-metabolic outputs
+
+Pipeline mode (`--run-mode pipeline`) now appends deterministic mitochondrial-metabolic metrics to `mito_metrics.tsv` and `summary.json`:
+
+- cores: `oxphos_core`, `gly_core`, `fao_core`, `ros_core`, `bio_core`
+- scores: `MRI`, `OSL`, `ESS`, `MCB`, `OGI`
+- flags: `metabolic_rigid_high`, `ros_high`, `energetic_strain_high`, `compensation_failure`
+
+These are transcriptional approximations from compact curated panels (no ML, no timepoints required) and are designed for single-sample scRNA-seq usage.

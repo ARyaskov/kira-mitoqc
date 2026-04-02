@@ -10,6 +10,7 @@ pub mod explain;
 pub mod fixtures;
 pub mod input;
 pub mod io;
+pub mod metrics;
 pub mod output;
 pub mod proxy;
 pub mod redox;

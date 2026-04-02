@@ -3,6 +3,9 @@
 use crate::data::aggregate::{AggregatedMatrix, AggregationMode, ClusterMap, aggregate};
 use crate::input::{GeneIndex, GeneResolution, InputError, ResolvedGeneSets};
 use crate::io::mtx::MtxInput;
+use crate::metrics::metabolic_extension::panels::{
+    BIOGENESIS_PANEL, FAO_PANEL, GLYCOLYSIS_PANEL, OXPHOS_PANEL, ROS_PANEL,
+};
 
 /// Dense expression values laid out as [gene][sample].
 #[derive(Debug, Clone, PartialEq)]
@@ -110,6 +113,11 @@ fn ordered_gene_symbols(resolved: &ResolvedGeneSets) -> Vec<String> {
     append_genes(&mut ordered, &resolved.fusion);
     append_genes(&mut ordered, &resolved.fission);
     append_genes(&mut ordered, &resolved.biogenesis);
+    ordered.extend(OXPHOS_PANEL.iter().map(|g| (*g).to_string()));
+    ordered.extend(GLYCOLYSIS_PANEL.iter().map(|g| (*g).to_string()));
+    ordered.extend(FAO_PANEL.iter().map(|g| (*g).to_string()));
+    ordered.extend(ROS_PANEL.iter().map(|g| (*g).to_string()));
+    ordered.extend(BIOGENESIS_PANEL.iter().map(|g| (*g).to_string()));
     ordered
 }
 

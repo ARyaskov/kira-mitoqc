@@ -63,7 +63,9 @@ If cache exists:
 1. Read metadata (`features`, `barcodes`) from the selected input format.
 2. Load config (`assets`) with geneset autodetection (human vs mouse by overlap).
 3. mmap `expr.bin`.
-4. Reuse only if cache aggregation mode matches requested `--mode`.
+4. Reuse only if:
+   - cache aggregation mode matches requested `--mode`, and
+   - cached gene count matches the current deterministic SoA layout (including additive metabolic panel genes).
 
 If mode mismatches, cache is rebuilt.
 
@@ -133,10 +135,24 @@ Core v1 sequence:
 
 1. `compute_proxies_v1` (with QC checks on gene-set coverage)
 2. `score_profile_v1` (axes + decay)
-3. optional redox stage (`--redox`)
-4. `classify_v1_with_redox`
-5. `explain_v1`
-6. `assemble_profiles_v1`
+3. additive mitochondrial-metabolic extension stage (always computed, output only in pipeline mode)
+4. optional redox stage (`--redox`)
+5. `classify_v1_with_redox`
+6. `explain_v1`
+7. `assemble_profiles_v1`
+
+### Mitochondrial-metabolic additive stage
+
+Per sample/cell/cluster (according to `--mode`), compute compact panel cores with deterministic 10% trimmed means (`log1p` transformed expression) and robust z-scores (median/MAD):
+
+- cores: `oxphos_core`, `gly_core`, `fao_core`, `ros_core`, `bio_core`
+- scores: `MRI`, `OSL`, `ESS`, `MCB`, `OGI`
+- flags: `metabolic_rigid_high`, `ros_high`, `energetic_strain_high`, `compensation_failure`
+
+NaN semantics:
+- if a panel has fewer than 3 resolved genes, panel core and dependent scores are `NaN`
+- dependent flags are `false`
+- panel coverage missingness is reported in pipeline `summary.json`
 
 ### Redox additive stage (`--redox`)
 
@@ -184,7 +200,12 @@ Pipeline-mode outputs (`--run-mode pipeline`):
   - includes `input.input_format`
   - includes `input.expression_type`
   - includes additive `redox` section when redox is enabled
+  - includes additive `mitochondrial_metabolic` section with panel version, thresholds, global stats, cluster stats (if mode=`cluster`), top clusters, and missingness
 - `mito_metrics.tsv`
+  - includes additive metabolic columns:
+    - `oxphos_core`, `gly_core`, `fao_core`, `ros_core`, `bio_core`
+    - `MRI`, `OSL`, `ESS`, `MCB`, `OGI`
+    - `metabolic_rigid_high`, `ros_high`, `energetic_strain_high`, `compensation_failure`
 - `pipeline_step.json`
 
 ## 9) Optional v2 additive branch (`--version v2`)
@@ -228,4 +249,3 @@ h5ad load -> aggregate -> `expr.bin` (mmap) ->
 same v1/v2 chain
 
 Note: H5AD pipeline mode is currently not supported.
-

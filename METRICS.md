@@ -7,6 +7,7 @@ Scope:
 - optional redox extension (`--redox`)
 - pipeline JSON artifacts (`summary.json`, `pipeline_step.json`)
 - v2 bundle output (`mitochondrial_profile.v2.json`, when `--version v2`)
+- mitochondrial-metabolic extension formulas are specified in `docs/METRICS.md`
 
 ## Canonical Conventions
 

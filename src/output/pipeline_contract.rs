@@ -8,6 +8,8 @@ use std::path::Path;
 use serde::Serialize;
 
 use crate::input::ExpressionSource;
+use crate::metrics::metabolic_extension::aggregate::MetabolicSummary;
+use crate::metrics::metabolic_extension::scores::MetabolicMetrics;
 use crate::output::OutputError;
 use crate::output::profile::MitoProfileV1;
 use crate::redox::{RedoxMetrics, RedoxRegime};
@@ -50,6 +52,8 @@ struct SummaryJson<'a> {
     axes_median: SummaryAxesMedian,
     #[serde(skip_serializing_if = "Option::is_none")]
     redox: Option<SummaryRedox>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mitochondrial_metabolic: Option<&'a MetabolicSummary>,
 }
 
 #[derive(Debug, Serialize)]
@@ -82,7 +86,7 @@ pub fn write_summary_json(
     input_format: &str,
     expression_type: ExpressionSource,
 ) -> Result<(), OutputError> {
-    write_summary_json_with_redox(out_dir, profiles, input_format, expression_type, None)
+    write_summary_json_with_redox(out_dir, profiles, input_format, expression_type, None, None)
 }
 
 /// Write `summary.json` for pipeline aggregator ingestion with optional redox extension.
@@ -92,6 +96,7 @@ pub fn write_summary_json_with_redox(
     input_format: &str,
     expression_type: ExpressionSource,
     redox: Option<&RedoxMetrics>,
+    metabolic_summary: Option<&MetabolicSummary>,
 ) -> Result<(), OutputError> {
     fs::create_dir_all(out_dir).map_err(|source| OutputError::CreateDir {
         path: out_dir.to_path_buf(),
@@ -124,6 +129,7 @@ pub fn write_summary_json_with_redox(
             regulation: median(profiles.iter().map(|p| p.axes.regulation)),
         },
         redox: redox.map(build_redox_summary),
+        mitochondrial_metabolic: metabolic_summary,
     };
 
     serde_json::to_writer_pretty(file, &summary)
@@ -136,6 +142,7 @@ pub fn write_mito_metrics_tsv(
     out_dir: &Path,
     barcodes: &[String],
     profiles: &[MitoProfileV1],
+    metabolic: &MetabolicMetrics,
 ) -> Result<(), OutputError> {
     fs::create_dir_all(out_dir).map_err(|source| OutputError::CreateDir {
         path: out_dir.to_path_buf(),
@@ -150,7 +157,7 @@ pub fn write_mito_metrics_tsv(
 
     writeln!(
         file,
-        "cell_id\tmitochondrial_state\tdecay_score\trobustness_margin\tbioenergetics\tros\tdynamics\tregulation"
+        "cell_id\tmitochondrial_state\tdecay_score\trobustness_margin\tbioenergetics\tros\tdynamics\tregulation\toxphos_core\tgly_core\tfao_core\tros_core\tbio_core\tMRI\tOSL\tESS\tMCB\tOGI\tmetabolic_rigid_high\tros_high\tenergetic_strain_high\tcompensation_failure"
     )
     .map_err(|source| OutputError::WriteFile {
         path: path.clone(),
@@ -160,7 +167,7 @@ pub fn write_mito_metrics_tsv(
     for (sample, profile) in profiles.iter().enumerate() {
         writeln!(
             file,
-            "{}\t{}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}",
+            "{}\t{}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{}\t{}\t{}\t{}",
             barcodes[sample],
             profile.mitochondrial_state,
             profile.decay_score,
@@ -168,7 +175,33 @@ pub fn write_mito_metrics_tsv(
             profile.axes.bioenergetics,
             profile.axes.ros,
             profile.axes.dynamics,
-            profile.axes.regulation
+            profile.axes.regulation,
+            metabolic.oxphos_core.get(sample).copied().unwrap_or(f32::NAN),
+            metabolic.gly_core.get(sample).copied().unwrap_or(f32::NAN),
+            metabolic.fao_core.get(sample).copied().unwrap_or(f32::NAN),
+            metabolic.ros_core.get(sample).copied().unwrap_or(f32::NAN),
+            metabolic.bio_core.get(sample).copied().unwrap_or(f32::NAN),
+            metabolic.mri.get(sample).copied().unwrap_or(f32::NAN),
+            metabolic.osl.get(sample).copied().unwrap_or(f32::NAN),
+            metabolic.ess.get(sample).copied().unwrap_or(f32::NAN),
+            metabolic.mcb.get(sample).copied().unwrap_or(f32::NAN),
+            metabolic.ogi.get(sample).copied().unwrap_or(f32::NAN),
+            metabolic
+                .metabolic_rigid_high
+                .get(sample)
+                .copied()
+                .unwrap_or(false),
+            metabolic.ros_high.get(sample).copied().unwrap_or(false),
+            metabolic
+                .energetic_strain_high
+                .get(sample)
+                .copied()
+                .unwrap_or(false),
+            metabolic
+                .compensation_failure
+                .get(sample)
+                .copied()
+                .unwrap_or(false)
         )
         .map_err(|source| OutputError::WriteFile {
             path: path.clone(),

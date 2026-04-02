@@ -65,8 +65,8 @@ pub fn compute_redox_metrics(
     let buffering_genes =
         load_panel_genes("redox_buffering_capacity.tsv", BUFFERING_PANEL_FALLBACK)?;
 
-    let oxidative_offsets = resolve_panel_offsets(gene_index, &oxidative_genes);
-    let buffering_offsets = resolve_panel_offsets(gene_index, &buffering_genes);
+    let oxidative_offsets = resolve_panel_offsets(gene_index, &oxidative_genes, soa.genes);
+    let buffering_offsets = resolve_panel_offsets(gene_index, &buffering_genes, soa.genes);
 
     let oxidative_cov = if oxidative_genes.is_empty() {
         0.0
@@ -189,16 +189,24 @@ fn mean_over_offsets(soa: &ExpressionSoAView, offsets: &[usize]) -> Vec<f32> {
     out
 }
 
-fn resolve_panel_offsets(gene_index: &GeneIndex, genes: &[String]) -> Vec<usize> {
+fn resolve_panel_offsets(
+    gene_index: &GeneIndex,
+    genes: &[String],
+    max_gene_rows: usize,
+) -> Vec<usize> {
     let mut out = Vec::new();
     for gene in genes {
         if let Some(idx) = gene_index.get_index(gene) {
-            out.push(idx);
+            if idx < max_gene_rows {
+                out.push(idx);
+            }
             continue;
         }
         let title = to_mouse_like(gene);
         if let Some(idx) = gene_index.get_index(&title) {
-            out.push(idx);
+            if idx < max_gene_rows {
+                out.push(idx);
+            }
         }
     }
     out.sort_unstable();
