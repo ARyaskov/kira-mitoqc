@@ -76,9 +76,12 @@ pub struct OptionalOmicsInputs {
 }
 
 /// Compute v2 proxies, extending v1 proxies with optional omics data.
+///
+/// Takes `v1` by value: this is the last consumer of `ProxyScores` in the
+/// pipeline, so moving it avoids a clone of all 8 per-sample vectors.
 pub fn compute_proxies_v2(
     primitives: &PrimitiveSignals,
-    v1: &ProxyScores,
+    v1: ProxyScores,
     refs_v2: &RefsV2,
     extra: &OptionalOmicsInputs,
 ) -> ProxyScoresV2 {
@@ -144,7 +147,7 @@ pub fn compute_proxies_v2(
     }
 
     ProxyScoresV2 {
-        v1: v1.clone(),
+        v1,
         v2_raw,
         v2_normalized,
     }

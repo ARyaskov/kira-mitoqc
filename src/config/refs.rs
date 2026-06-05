@@ -21,41 +21,28 @@ pub struct Eps {
 
 /// Reference constants for normalization.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub struct Refs {
-    #[serde(rename = "STOICH_REF")]
     pub stoich_ref: f32,
-    #[serde(rename = "UNCOUPLING_REF")]
     pub uncoupling_ref: f32,
-    #[serde(rename = "ROS_REF")]
     pub ros_ref: f32,
-    #[serde(rename = "REDOX_REF")]
     pub redox_ref: f32,
-    #[serde(rename = "ATP_REF")]
     pub atp_ref: f32,
-    #[serde(rename = "MITO_REF")]
     pub mito_ref: f32,
-    #[serde(rename = "DYN_REF")]
     pub dyn_ref: f32,
-    #[serde(rename = "BIO_REF")]
     pub bio_ref: f32,
 }
 
 /// Thresholds for classification.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub struct Thresholds {
-    #[serde(rename = "ROS_HIGH")]
     pub ros_high: f32,
-    #[serde(rename = "BIOENERGETICS_LOW")]
     pub bioenergetics_low: f32,
-    #[serde(rename = "BIOENERGETICS_HIGH")]
     pub bioenergetics_high: f32,
-    #[serde(rename = "DYNAMICS_HIGH")]
     pub dynamics_high: f32,
-    #[serde(rename = "REGULATION_LOW")]
     pub regulation_low: f32,
-    #[serde(rename = "STRUCTURAL_BIO_MIN")]
     pub structural_bio_min: f32,
-    #[serde(rename = "STRUCTURAL_DYN_MIN")]
     pub structural_dyn_min: f32,
 }
 

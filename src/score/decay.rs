@@ -1,5 +1,6 @@
 //! Global decay score aggregation.
 
+use rayon::prelude::*;
 use tracing::error;
 
 use crate::config::weights::WeightsV1;
@@ -14,41 +15,43 @@ pub struct DecayScoreVec {
 }
 
 /// Compute decay score and robustness margin for v1.
+///
+/// Global weight sum is validated at config load time.
 pub fn compute_decay_v1(axes: &AxisScoresVec, weights: &WeightsV1) -> DecayScoreVec {
-    debug_assert!(
-        (weights.global.bioenergetics
-            + weights.global.ros
-            + weights.global.dynamics
-            + weights.global.regulation
-            - 1.0)
-            .abs()
-            <= 1e-6
-    );
-
     let len = axes.bioenergetics.len();
     assert_eq!(axes.ros.len(), len);
     assert_eq!(axes.dynamics.len(), len);
     assert_eq!(axes.regulation.len(), len);
 
+    let w_bio = weights.global.bioenergetics;
+    let w_ros = weights.global.ros;
+    let w_dyn = weights.global.dynamics;
+    let w_reg = weights.global.regulation;
+
     let mut decay = vec![0.0; len];
     let mut robustness_margin = vec![0.0; len];
 
-    for i in 0..len {
-        let value = weights.global.bioenergetics * axes.bioenergetics[i]
-            + weights.global.ros * axes.ros[i]
-            + weights.global.dynamics * axes.dynamics[i]
-            + weights.global.regulation * axes.regulation[i];
+    decay
+        .par_iter_mut()
+        .zip(robustness_margin.par_iter_mut())
+        .enumerate()
+        .with_min_len(1024)
+        .for_each(|(i, (d, r))| {
+            let value = w_bio * axes.bioenergetics[i]
+                + w_ros * axes.ros[i]
+                + w_dyn * axes.dynamics[i]
+                + w_reg * axes.regulation[i];
 
-        if value.is_nan() {
-            error!(sample = i, "NaN encountered in decay score");
-            decay[i] = 0.0;
-            robustness_margin[i] = 0.0;
-        } else {
-            let clamped = clamp01(value);
-            decay[i] = clamped;
-            robustness_margin[i] = clamp01(1.0 - clamped);
-        }
-    }
+            if value.is_nan() {
+                error!(sample = i, "NaN encountered in decay score");
+                *d = 0.0;
+                *r = 0.0;
+            } else {
+                let clamped = clamp01(value);
+                *d = clamped;
+                *r = clamp01(1.0 - clamped);
+            }
+        });
 
     DecayScoreVec {
         decay,

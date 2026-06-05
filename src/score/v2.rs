@@ -1,5 +1,6 @@
 //! v2 axis aggregation with multi-omics corrections.
 
+use rayon::prelude::*;
 use tracing::error;
 
 use crate::config::refs_v2::RefsV2;
@@ -51,38 +52,61 @@ pub fn compute_axes_v2(
         samples,
     );
 
+    let w_bio = &weights.axis.bioenergetics;
+    let w_ros = &weights.axis.ros;
+    let w_dyn = &weights.axis.dynamics;
+    let w_reg = &weights.axis.regulation;
+
+    let (w_bio_etc, w_bio_unc, w_bio_atp, w_bio_cn, w_bio_het) = (
+        w_bio.etc_stoichiometry_loss,
+        w_bio.mtdna_expression_uncoupling,
+        w_bio.atp_coupling_loss,
+        w_bio.mtdna_copy_number_instability,
+        w_bio.mtdna_heteroplasmy_burden,
+    );
+    let (w_ros_over, w_ros_nadh) = (w_ros.ros_response_overdrive, w_ros.nadh_imbalance);
+    let (w_dyn_imb, w_dyn_mito) = (w_dyn.dynamics_imbalance, w_dyn.mitophagy_excess);
+    let (w_reg_bio, w_reg_cn, w_reg_het) = (
+        w_reg.biogenesis_failure,
+        w_reg.mtdna_copy_number_instability,
+        w_reg.mtdna_heteroplasmy_burden,
+    );
+
     let mut bioenergetics = vec![0.0; samples];
     let mut ros_axis = vec![0.0; samples];
     let mut dynamics_axis = vec![0.0; samples];
     let mut regulation_axis = vec![0.0; samples];
 
-    for i in 0..samples {
-        let bio = weights.axis.bioenergetics.etc_stoichiometry_loss * etc_corrected[i]
-            + weights.axis.bioenergetics.mtdna_expression_uncoupling * uncoupling[i]
-            + weights.axis.bioenergetics.atp_coupling_loss * atp_corrected[i]
-            + weights.axis.bioenergetics.mtdna_copy_number_instability * cn[i]
-            + weights.axis.bioenergetics.mtdna_heteroplasmy_burden * het[i];
-        let ros_val = weights.axis.ros.ros_response_overdrive * ros[i]
-            + weights.axis.ros.nadh_imbalance * nadh[i];
-        let dyn_val = weights.axis.dynamics.dynamics_imbalance * dynamics[i]
-            + weights.axis.dynamics.mitophagy_excess * mitophagy[i];
-        let reg_val = weights.axis.regulation.biogenesis_failure * biogenesis[i]
-            + weights.axis.regulation.mtdna_copy_number_instability * cn[i]
-            + weights.axis.regulation.mtdna_heteroplasmy_burden * het[i];
+    bioenergetics
+        .par_iter_mut()
+        .zip(ros_axis.par_iter_mut())
+        .zip(dynamics_axis.par_iter_mut())
+        .zip(regulation_axis.par_iter_mut())
+        .enumerate()
+        .with_min_len(1024)
+        .for_each(|(i, (((bio_o, ros_o), dyn_o), reg_o))| {
+            let bio = w_bio_etc * etc_corrected[i]
+                + w_bio_unc * uncoupling[i]
+                + w_bio_atp * atp_corrected[i]
+                + w_bio_cn * cn[i]
+                + w_bio_het * het[i];
+            let ros_val = w_ros_over * ros[i] + w_ros_nadh * nadh[i];
+            let dyn_val = w_dyn_imb * dynamics[i] + w_dyn_mito * mitophagy[i];
+            let reg_val = w_reg_bio * biogenesis[i] + w_reg_cn * cn[i] + w_reg_het * het[i];
 
-        if bio.is_nan() || ros_val.is_nan() || dyn_val.is_nan() || reg_val.is_nan() {
-            error!(sample = i, "NaN encountered in v2 axis aggregation");
-            bioenergetics[i] = 0.0;
-            ros_axis[i] = 0.0;
-            dynamics_axis[i] = 0.0;
-            regulation_axis[i] = 0.0;
-        } else {
-            bioenergetics[i] = bio;
-            ros_axis[i] = ros_val;
-            dynamics_axis[i] = dyn_val;
-            regulation_axis[i] = reg_val;
-        }
-    }
+            if bio.is_nan() || ros_val.is_nan() || dyn_val.is_nan() || reg_val.is_nan() {
+                error!(sample = i, "NaN encountered in v2 axis aggregation");
+                *bio_o = 0.0;
+                *ros_o = 0.0;
+                *dyn_o = 0.0;
+                *reg_o = 0.0;
+            } else {
+                *bio_o = bio;
+                *ros_o = ros_val;
+                *dyn_o = dyn_val;
+                *reg_o = reg_val;
+            }
+        });
 
     AxisScoresVec {
         bioenergetics,
@@ -95,25 +119,35 @@ pub fn compute_axes_v2(
 /// Compute decay scores for v2 axes.
 pub fn compute_decay_v2(axes: &AxisScoresVec, weights: &WeightsV2) -> DecayScoreVec {
     let len = axes.bioenergetics.len();
+    let w_bio = weights.global.bioenergetics;
+    let w_ros = weights.global.ros;
+    let w_dyn = weights.global.dynamics;
+    let w_reg = weights.global.regulation;
+
     let mut decay = vec![0.0; len];
     let mut robustness_margin = vec![0.0; len];
 
-    for i in 0..len {
-        let value = weights.global.bioenergetics * axes.bioenergetics[i]
-            + weights.global.ros * axes.ros[i]
-            + weights.global.dynamics * axes.dynamics[i]
-            + weights.global.regulation * axes.regulation[i];
+    decay
+        .par_iter_mut()
+        .zip(robustness_margin.par_iter_mut())
+        .enumerate()
+        .with_min_len(1024)
+        .for_each(|(i, (d, r))| {
+            let value = w_bio * axes.bioenergetics[i]
+                + w_ros * axes.ros[i]
+                + w_dyn * axes.dynamics[i]
+                + w_reg * axes.regulation[i];
 
-        if value.is_nan() {
-            error!(sample = i, "NaN encountered in v2 decay score");
-            decay[i] = 0.0;
-            robustness_margin[i] = 0.0;
-        } else {
-            let clamped = clamp01(value);
-            decay[i] = clamped;
-            robustness_margin[i] = clamp01(1.0 - clamped);
-        }
-    }
+            if value.is_nan() {
+                error!(sample = i, "NaN encountered in v2 decay score");
+                *d = 0.0;
+                *r = 0.0;
+            } else {
+                let clamped = clamp01(value);
+                *d = clamped;
+                *r = clamp01(1.0 - clamped);
+            }
+        });
 
     DecayScoreVec {
         decay,

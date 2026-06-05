@@ -15,6 +15,9 @@ pub struct Metadata {
 }
 
 /// Weights for a single axis (bioenergetics, ros, dynamics, regulation).
+///
+/// Field names use the TOML conventions from `weights_v1.toml` — preserve
+/// the explicit renames since the casing mixes acronyms (ETC, mtDNA, ATP).
 #[derive(Debug, Clone, Deserialize)]
 pub struct AxisWeights {
     #[serde(rename = "ETC_stoichiometry_loss")]

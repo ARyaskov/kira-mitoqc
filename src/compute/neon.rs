@@ -1,48 +1,54 @@
-//! NEON implementation for primitive signals.
+//! NEON primitives, tiled by 4-sample chunks. Mirror of `avx2.rs`.
 
 #![cfg(target_arch = "aarch64")]
 
-use wide::f32x4;
+use std::arch::aarch64::*;
 
 use crate::cache::ExpressionSoAView;
 use crate::compute::{GeneOffsets, PrimitiveSignals};
 
-pub fn compute_primitives_neon(soa: &ExpressionSoAView, offsets: &GeneOffsets) -> PrimitiveSignals {
+pub fn compute_primitives_neon(
+    soa: &ExpressionSoAView<'_>,
+    offsets: &GeneOffsets,
+) -> PrimitiveSignals {
     let samples = soa.samples;
 
-    let mut mtdna_mean = vec![0.0; samples];
-    let mut nuclear_mean = vec![0.0; samples];
-    let mut c_i = vec![0.0; samples];
-    let mut c_iii = vec![0.0; samples];
-    let mut c_iv = vec![0.0; samples];
-    let mut c_v = vec![0.0; samples];
-    let mut ros_mean = vec![0.0; samples];
-    let mut mitophagy_mean = vec![0.0; samples];
-    let mut fusion_mean = vec![0.0; samples];
-    let mut fission_mean = vec![0.0; samples];
-    let mut biogenesis_mean = vec![0.0; samples];
-    let mut atp_mt = vec![0.0; samples];
-    let mut atp_nu = vec![0.0; samples];
-    let mut stoich_variance = vec![0.0; samples];
+    let mut mtdna_mean = vec![0.0_f32; samples];
+    let mut nuclear_mean = vec![0.0_f32; samples];
+    let mut c_i = vec![0.0_f32; samples];
+    let mut c_iii = vec![0.0_f32; samples];
+    let mut c_iv = vec![0.0_f32; samples];
+    let mut c_v = vec![0.0_f32; samples];
+    let mut ros_mean = vec![0.0_f32; samples];
+    let mut mitophagy_mean = vec![0.0_f32; samples];
+    let mut fusion_mean = vec![0.0_f32; samples];
+    let mut fission_mean = vec![0.0_f32; samples];
+    let mut biogenesis_mean = vec![0.0_f32; samples];
+    let mut atp_mt = vec![0.0_f32; samples];
+    let mut atp_nu = vec![0.0_f32; samples];
+    let mut stoich_variance = vec![0.0_f32; samples];
 
-    mean_over_offsets_neon(soa, &offsets.mtdna_all, &mut mtdna_mean);
-    mean_over_offsets_neon(soa, &offsets.nuclear_oxphos, &mut nuclear_mean);
+    let values = soa.values();
+    let mut panels: [(&[usize], &mut [f32]); 12] = [
+        (offsets.mtdna_all.as_slice(), mtdna_mean.as_mut_slice()),
+        (offsets.nuclear_oxphos.as_slice(), nuclear_mean.as_mut_slice()),
+        (offsets.complex_i.as_slice(), c_i.as_mut_slice()),
+        (offsets.complex_iii.as_slice(), c_iii.as_mut_slice()),
+        (offsets.complex_iv.as_slice(), c_iv.as_mut_slice()),
+        (offsets.complex_v.as_slice(), c_v.as_mut_slice()),
+        (offsets.ros.as_slice(), ros_mean.as_mut_slice()),
+        (offsets.mitophagy.as_slice(), mitophagy_mean.as_mut_slice()),
+        (offsets.fusion.as_slice(), fusion_mean.as_mut_slice()),
+        (offsets.fission.as_slice(), fission_mean.as_mut_slice()),
+        (offsets.biogenesis.as_slice(), biogenesis_mean.as_mut_slice()),
+        (offsets.atp_mt.as_slice(), atp_mt.as_mut_slice()),
+    ];
 
-    mean_over_offsets_neon(soa, &offsets.complex_i, &mut c_i);
-    mean_over_offsets_neon(soa, &offsets.complex_iii, &mut c_iii);
-    mean_over_offsets_neon(soa, &offsets.complex_iv, &mut c_iv);
-    mean_over_offsets_neon(soa, &offsets.complex_v, &mut c_v);
-
-    mean_over_offsets_neon(soa, &offsets.ros, &mut ros_mean);
-    mean_over_offsets_neon(soa, &offsets.mitophagy, &mut mitophagy_mean);
-    mean_over_offsets_neon(soa, &offsets.fusion, &mut fusion_mean);
-    mean_over_offsets_neon(soa, &offsets.fission, &mut fission_mean);
-    mean_over_offsets_neon(soa, &offsets.biogenesis, &mut biogenesis_mean);
-
-    mean_over_offsets_neon(soa, &offsets.atp_mt, &mut atp_mt);
-    copy_single_gene_neon(soa, offsets.atp_nu, &mut atp_nu);
-
-    variance4_neon(&c_i, &c_iii, &c_iv, &c_v, &mut stoich_variance);
+    unsafe {
+        tiled_means_neon(values, samples, &mut panels);
+        copy_single_neon(values, samples, offsets.atp_nu, &mut atp_nu);
+        variance4_neon(&c_i, &c_iii, &c_iv, &c_v, &mut stoich_variance);
+    }
 
     PrimitiveSignals {
         mtdna_mean,
@@ -62,77 +68,113 @@ pub fn compute_primitives_neon(soa: &ExpressionSoAView, offsets: &GeneOffsets) -
     }
 }
 
-fn mean_over_offsets_neon(soa: &ExpressionSoAView, offsets: &[usize], out: &mut [f32]) {
-    let samples = soa.samples;
-    if offsets.is_empty() {
-        for value in out.iter_mut() {
-            *value = 0.0;
+#[target_feature(enable = "neon")]
+unsafe fn tiled_means_neon(
+    values: &[f32],
+    samples: usize,
+    panels: &mut [(&[usize], &mut [f32])],
+) {
+    let chunks = samples & !3;
+    let s_ptr_base = values.as_ptr();
+
+    let mut invs: [float32x4_t; 16] = [vdupq_n_f32(0.0); 16];
+    let mut counts: [f32; 16] = [0.0; 16];
+    debug_assert!(panels.len() <= invs.len());
+    for (i, (offs, _)) in panels.iter().enumerate() {
+        if !offs.is_empty() {
+            let n = offs.len() as f32;
+            counts[i] = n;
+            invs[i] = vdupq_n_f32(1.0 / n);
         }
-        return;
     }
 
-    let count = offsets.len() as f32;
-    let denom = f32x4::new([count; 4]);
-    let chunks = samples / 4 * 4;
-
-    for s in (0..chunks).step_by(4) {
-        let mut acc = f32x4::new([0.0; 4]);
-        for &g in offsets {
-            let base = g * samples + s;
-            let v = load_f32x4(&soa.values, base);
-            acc = acc + v;
+    let mut s = 0;
+    while s < chunks {
+        for (i, (offs, out)) in panels.iter_mut().enumerate() {
+            if offs.is_empty() {
+                unsafe {
+                    vst1q_f32(out.as_mut_ptr().add(s), vdupq_n_f32(0.0));
+                }
+                continue;
+            }
+            let mut acc = vdupq_n_f32(0.0);
+            for &g in *offs {
+                let v = unsafe { vld1q_f32(s_ptr_base.add(g * samples + s)) };
+                acc = vaddq_f32(acc, v);
+            }
+            let mean = vmulq_f32(acc, invs[i]);
+            unsafe {
+                vst1q_f32(out.as_mut_ptr().add(s), mean);
+            }
         }
-        let mean = acc / denom;
-        store_f32x4(mean, out, s);
+        s += 4;
     }
 
     for s in chunks..samples {
-        let mut sum = 0.0;
-        for &g in offsets {
-            let idx = g * samples + s;
-            sum += soa.values[idx];
+        for (i, (offs, out)) in panels.iter_mut().enumerate() {
+            if offs.is_empty() {
+                out[s] = 0.0;
+                continue;
+            }
+            let mut sum = 0.0_f32;
+            for &g in *offs {
+                sum += values[g * samples + s];
+            }
+            out[s] = sum / counts[i];
         }
-        out[s] = sum / count;
     }
 }
 
-fn copy_single_gene_neon(soa: &ExpressionSoAView, gene: usize, out: &mut [f32]) {
-    let samples = soa.samples;
+#[target_feature(enable = "neon")]
+unsafe fn copy_single_neon(values: &[f32], samples: usize, gene: usize, out: &mut [f32]) {
     if gene == usize::MAX {
-        for value in out.iter_mut() {
-            *value = 0.0;
-        }
+        out.fill(0.0);
         return;
     }
     let start = gene * samples;
-    let chunks = samples / 4 * 4;
-    for s in (0..chunks).step_by(4) {
-        let v = load_f32x4(&soa.values, start + s);
-        store_f32x4(v, out, s);
+    let chunks = samples & !3;
+    unsafe {
+        let mut s = 0;
+        while s < chunks {
+            let v = vld1q_f32(values.as_ptr().add(start + s));
+            vst1q_f32(out.as_mut_ptr().add(s), v);
+            s += 4;
+        }
     }
     for s in chunks..samples {
-        out[s] = soa.values[start + s];
+        out[s] = values[start + s];
     }
 }
 
-fn variance4_neon(a: &[f32], b: &[f32], c: &[f32], d: &[f32], out: &mut [f32]) {
+#[target_feature(enable = "neon")]
+unsafe fn variance4_neon(a: &[f32], b: &[f32], c: &[f32], d: &[f32], out: &mut [f32]) {
     let samples = out.len();
-    let chunks = samples / 4 * 4;
-    let quarter = f32x4::new([0.25; 4]);
+    let chunks = samples & !3;
+    let quarter = unsafe { vdupq_n_f32(0.25) };
 
-    for s in (0..chunks).step_by(4) {
-        let av = load_f32x4(a, s);
-        let bv = load_f32x4(b, s);
-        let cv = load_f32x4(c, s);
-        let dv = load_f32x4(d, s);
-        let sum = (av + bv) + (cv + dv);
-        let mean = sum * quarter;
-        let da = av - mean;
-        let db = bv - mean;
-        let dc = cv - mean;
-        let dd = dv - mean;
-        let var = ((da * da) + (db * db) + (dc * dc) + (dd * dd)) * quarter;
-        store_f32x4(var, out, s);
+    unsafe {
+        let mut s = 0;
+        while s < chunks {
+            let av = vld1q_f32(a.as_ptr().add(s));
+            let bv = vld1q_f32(b.as_ptr().add(s));
+            let cv = vld1q_f32(c.as_ptr().add(s));
+            let dv = vld1q_f32(d.as_ptr().add(s));
+            let sum = vaddq_f32(vaddq_f32(av, bv), vaddq_f32(cv, dv));
+            let mean = vmulq_f32(sum, quarter);
+            let da = vsubq_f32(av, mean);
+            let db = vsubq_f32(bv, mean);
+            let dc = vsubq_f32(cv, mean);
+            let dd = vsubq_f32(dv, mean);
+            // FMA chain: ss = da*da + (db*db + (dc*dc + dd*dd))
+            let ss = vfmaq_f32(
+                vfmaq_f32(vfmaq_f32(vmulq_f32(dd, dd), dc, dc), db, db),
+                da,
+                da,
+            );
+            let var = vmulq_f32(ss, quarter);
+            vst1q_f32(out.as_mut_ptr().add(s), var);
+            s += 4;
+        }
     }
 
     for s in chunks..samples {
@@ -143,20 +185,4 @@ fn variance4_neon(a: &[f32], b: &[f32], c: &[f32], d: &[f32], out: &mut [f32]) {
         let dd = d[s] - mean;
         out[s] = (da * da + db * db + dc * dc + dd * dd) * 0.25;
     }
-}
-
-#[inline]
-fn load_f32x4(values: &[f32], start: usize) -> f32x4 {
-    f32x4::new([
-        values[start],
-        values[start + 1],
-        values[start + 2],
-        values[start + 3],
-    ])
-}
-
-#[inline]
-fn store_f32x4(v: f32x4, out: &mut [f32], start: usize) {
-    let lanes = v.to_array();
-    out[start..start + 4].copy_from_slice(&lanes);
 }

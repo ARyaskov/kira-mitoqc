@@ -34,51 +34,67 @@ pub struct MtxDiscovery {
 }
 
 /// Load features.tsv/genes.tsv and barcodes.tsv without parsing the matrix.
+/// `gene_symbol_col` is 0-based: 0 = id, 1 = symbol. `None` defaults to symbol.
+fn pick_feature_vec(
+    gene_ids: Vec<String>,
+    gene_symbols: Vec<String>,
+    gene_symbol_col: Option<usize>,
+) -> Result<Vec<String>, InputError> {
+    match gene_symbol_col {
+        None | Some(1) => Ok(gene_symbols),
+        Some(0) => Ok(gene_ids),
+        Some(other) => Err(InputError::InvalidGeneSymbolColumn {
+            requested: other + 1,
+            available: 2,
+        }),
+    }
+}
+
 pub fn load_mtx_metadata(
     path: &Path,
     gene_symbol_col: Option<usize>,
 ) -> Result<(Vec<String>, Vec<String>), InputError> {
-    if let Some(col) = gene_symbol_col
-        && col != 1
-    {
-        return Err(InputError::InvalidGeneSymbolColumn {
-            requested: col + 1,
-            available: 2,
-        });
-    }
-
     let metadata = Reader::new(path)
         .read_metadata()
         .map_err(|e| map_scio_error(path, e.code, e.message))?;
-    Ok((metadata.gene_symbols, metadata.barcodes))
+    let features = pick_feature_vec(metadata.gene_ids, metadata.gene_symbols, gene_symbol_col)?;
+    Ok((features, metadata.barcodes))
 }
 
 /// Load Matrix Market files from a directory.
 pub fn load_mtx_dir(path: &Path, gene_symbol_col: Option<usize>) -> Result<MtxInput, InputError> {
-    if let Some(col) = gene_symbol_col
-        && col != 1
-    {
-        return Err(InputError::InvalidGeneSymbolColumn {
-            requested: col + 1,
-            available: 2,
-        });
-    }
-
     info!(path = ?path, "Loading MTX directory via kira-scio");
     let canonical = Reader::new(path)
         .read_all()
         .map_err(|e| map_scio_error(path, e.code, e.message))?;
 
+    // scio uses u64/u32; sprs needs usize.
     let matrix = CsMat::new_csc(
         (canonical.matrix.n_genes, canonical.matrix.n_cells),
-        canonical.matrix.col_ptr,
-        canonical.matrix.row_idx,
+        canonical
+            .matrix
+            .col_ptr
+            .into_iter()
+            .map(|v| v as usize)
+            .collect::<Vec<_>>(),
+        canonical
+            .matrix
+            .row_idx
+            .into_iter()
+            .map(|v| v as usize)
+            .collect::<Vec<_>>(),
         canonical.matrix.values,
     );
 
+    let features = pick_feature_vec(
+        canonical.metadata.gene_ids,
+        canonical.metadata.gene_symbols,
+        gene_symbol_col,
+    )?;
+
     Ok(MtxInput {
         matrix,
-        features: canonical.metadata.gene_symbols,
+        features,
         barcodes: canonical.metadata.barcodes,
     })
 }

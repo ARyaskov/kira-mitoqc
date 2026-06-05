@@ -3,7 +3,7 @@ use kira_mitoqc::classify::classify_v1_with_redox;
 use kira_mitoqc::compute::{GeneOffsets, scalar};
 use kira_mitoqc::config::refs::{Eps, Metadata, Normalization, Qc, Refs, RefsV1, Thresholds};
 use kira_mitoqc::core::types::{GeneSet, ProxyKey};
-use kira_mitoqc::data::ExpressionSoA;
+use kira_mitoqc::data::{ExpressionSoA, SoaIndex};
 use kira_mitoqc::input::{GeneIndex, resolve_all_genesets};
 use kira_mitoqc::proxy::compute_proxies_v1;
 use kira_mitoqc::redox::{RedoxRegime, compute_redox_metrics};
@@ -141,6 +141,7 @@ fn redox_metrics_deterministic() {
 
     let index = GeneIndex::from_feature_list(&features);
     let resolved = resolve_all_genesets(&index, &geneset);
+    let soa_index = SoaIndex::from_resolved(&resolved);
     let refs = refs_fixture();
     let weights = weights_fixture();
     let primitives =
@@ -148,8 +149,8 @@ fn redox_metrics_deterministic() {
     let proxies = compute_proxies_v1(&primitives, &resolved, &refs).expect("proxies");
     let axes = compute_axes_v1(&proxies, &weights);
 
-    let a = compute_redox_metrics(&view, &index, &axes, &proxies).expect("redox");
-    let b = compute_redox_metrics(&view, &index, &axes, &proxies).expect("redox");
+    let a = compute_redox_metrics(&view, &soa_index, &axes, &proxies).expect("redox");
+    let b = compute_redox_metrics(&view, &soa_index, &axes, &proxies).expect("redox");
     assert_eq!(a, b);
 }
 
@@ -192,6 +193,7 @@ fn redox_pipeline_is_scalar_dispatch_equivalent() {
 
     let index = GeneIndex::from_feature_list(&features);
     let resolved = resolve_all_genesets(&index, &geneset);
+    let soa_index = SoaIndex::from_resolved(&resolved);
     let offsets = GeneOffsets::from_resolved(&resolved);
 
     let refs = refs_fixture();
@@ -208,9 +210,10 @@ fn redox_pipeline_is_scalar_dispatch_equivalent() {
     let axes_dispatch = compute_axes_v1(&proxies_dispatch, &weights);
 
     let redox_scalar =
-        compute_redox_metrics(&view, &index, &axes_scalar, &proxies_scalar).expect("redox");
+        compute_redox_metrics(&view, &soa_index, &axes_scalar, &proxies_scalar).expect("redox");
     let redox_dispatch =
-        compute_redox_metrics(&view, &index, &axes_dispatch, &proxies_dispatch).expect("redox");
+        compute_redox_metrics(&view, &soa_index, &axes_dispatch, &proxies_dispatch)
+            .expect("redox");
 
     assert_eq!(redox_scalar, redox_dispatch);
     assert!(

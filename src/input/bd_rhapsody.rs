@@ -40,8 +40,18 @@ pub fn load_bd_rhapsody(path: &Path) -> Result<BdRhapsodyInput, InputError> {
 
     let matrix = CsMat::new_csc(
         (canonical.matrix.n_genes, canonical.matrix.n_cells),
-        canonical.matrix.col_ptr,
-        canonical.matrix.row_idx,
+        canonical
+            .matrix
+            .col_ptr
+            .into_iter()
+            .map(|v| v as usize)
+            .collect::<Vec<_>>(),
+        canonical
+            .matrix
+            .row_idx
+            .into_iter()
+            .map(|v| v as usize)
+            .collect::<Vec<_>>(),
         canonical.matrix.values,
     );
 

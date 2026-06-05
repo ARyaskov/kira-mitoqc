@@ -1,10 +1,11 @@
 use std::path::{Path, PathBuf};
 
+use rayon::prelude::*;
 use thiserror::Error;
 
 use crate::cache::ExpressionSoAView;
 use crate::core::types::{ProxyKey, ProxyScores};
-use crate::input::GeneIndex;
+use crate::data::SoaIndex;
 use crate::score::AxisScoresVec;
 use crate::util::numeric::clamp01;
 
@@ -54,8 +55,8 @@ const BUFFERING_PANEL_FALLBACK: &[&str] = &[
 ];
 
 pub fn compute_redox_metrics(
-    soa: &ExpressionSoAView,
-    gene_index: &GeneIndex,
+    soa: &ExpressionSoAView<'_>,
+    soa_index: &SoaIndex,
     axes: &AxisScoresVec,
     proxies: &ProxyScores,
 ) -> Result<RedoxMetrics, RedoxError> {
@@ -65,8 +66,8 @@ pub fn compute_redox_metrics(
     let buffering_genes =
         load_panel_genes("redox_buffering_capacity.tsv", BUFFERING_PANEL_FALLBACK)?;
 
-    let oxidative_offsets = resolve_panel_offsets(gene_index, &oxidative_genes, soa.genes);
-    let buffering_offsets = resolve_panel_offsets(gene_index, &buffering_genes, soa.genes);
+    let oxidative_offsets = resolve_panel_offsets(soa_index, &oxidative_genes, soa.genes);
+    let buffering_offsets = resolve_panel_offsets(soa_index, &buffering_genes, soa.genes);
 
     let oxidative_cov = if oxidative_genes.is_empty() {
         0.0
@@ -97,27 +98,35 @@ pub fn compute_redox_metrics(
     let mut mitochondrial_stress_adaptation_score = vec![0.0; samples];
     let mut redox_regime = vec![RedoxRegime::Baseline; samples];
 
-    for i in 0..samples {
-        let oxidative =
-            clamp01(0.65 * oxidative_norm[i] + 0.20 * ros_proxy[i] + 0.15 * nadh_proxy[i]);
-        let buffering = clamp01(
-            0.70 * buffering_norm[i]
-                + 0.20 * (1.0 - biogenesis_failure[i])
-                + 0.10 * (1.0 - axes.ros[i]),
-        );
+    mito_oxidative_stress_index
+        .par_iter_mut()
+        .zip(redox_buffering_capacity.par_iter_mut())
+        .zip(mito_redox_mismatch.par_iter_mut())
+        .zip(mitochondrial_stress_adaptation_score.par_iter_mut())
+        .zip(redox_regime.par_iter_mut())
+        .enumerate()
+        .with_min_len(1024)
+        .for_each(|(i, ((((ox_out, buf_out), mm_out), ad_out), rg_out))| {
+            let oxidative =
+                clamp01(0.65 * oxidative_norm[i] + 0.20 * ros_proxy[i] + 0.15 * nadh_proxy[i]);
+            let buffering = clamp01(
+                0.70 * buffering_norm[i]
+                    + 0.20 * (1.0 - biogenesis_failure[i])
+                    + 0.10 * (1.0 - axes.ros[i]),
+            );
 
-        let mismatch = (oxidative - buffering).clamp(-1.0, 1.0);
-        let mismatch01 = clamp01((mismatch + 1.0) * 0.5);
-        let adaptation =
-            clamp01(0.45 * axes.bioenergetics[i] + 0.25 * axes.regulation[i] + 0.30 * mismatch01);
+            let mismatch = (oxidative - buffering).clamp(-1.0, 1.0);
+            let mismatch01 = clamp01((mismatch + 1.0) * 0.5);
+            let adaptation = clamp01(
+                0.45 * axes.bioenergetics[i] + 0.25 * axes.regulation[i] + 0.30 * mismatch01,
+            );
 
-        mito_oxidative_stress_index[i] = oxidative;
-        redox_buffering_capacity[i] = buffering;
-        mito_redox_mismatch[i] = mismatch;
-        mitochondrial_stress_adaptation_score[i] = adaptation;
-
-        redox_regime[i] = classify_redox_regime(oxidative, buffering, mismatch);
-    }
+            *ox_out = oxidative;
+            *buf_out = buffering;
+            *mm_out = mismatch;
+            *ad_out = adaptation;
+            *rg_out = classify_redox_regime(oxidative, buffering, mismatch);
+        });
 
     Ok(RedoxMetrics {
         mito_oxidative_stress_index,
@@ -171,39 +180,43 @@ fn min_max_norm(values: &[f32]) -> Vec<f32> {
     values.iter().map(|v| clamp01((v - min_v) / span)).collect()
 }
 
-fn mean_over_offsets(soa: &ExpressionSoAView, offsets: &[usize]) -> Vec<f32> {
+fn mean_over_offsets(soa: &ExpressionSoAView<'_>, offsets: &[usize]) -> Vec<f32> {
     let samples = soa.samples;
     let mut out = vec![0.0; samples];
     if offsets.is_empty() {
         return out;
     }
+    let values = soa.values();
     let denom = offsets.len() as f32;
-    for s in 0..samples {
-        let mut sum = 0.0;
-        for &g in offsets {
-            let idx = g * samples + s;
-            sum += soa.values[idx];
-        }
-        out[s] = sum / denom;
-    }
+    out.par_iter_mut()
+        .enumerate()
+        .with_min_len(1024)
+        .for_each(|(s, slot)| {
+            let mut sum = 0.0_f32;
+            for &g in offsets {
+                sum += values[g * samples + s];
+            }
+            *slot = sum / denom;
+        });
     out
 }
 
 fn resolve_panel_offsets(
-    gene_index: &GeneIndex,
+    soa_index: &SoaIndex,
     genes: &[String],
     max_gene_rows: usize,
 ) -> Vec<usize> {
     let mut out = Vec::new();
     for gene in genes {
-        if let Some(idx) = gene_index.get_index(gene) {
+        if let Some(idx) = soa_index.get(gene) {
             if idx < max_gene_rows {
                 out.push(idx);
             }
             continue;
         }
+        // Mouse-case fallback (mirrors the SoA fill chain).
         let title = to_mouse_like(gene);
-        if let Some(idx) = gene_index.get_index(&title) {
+        if let Some(idx) = soa_index.get(&title) {
             if idx < max_gene_rows {
                 out.push(idx);
             }
@@ -267,8 +280,7 @@ fn resource_candidates(file_name: &str) -> Vec<PathBuf> {
 mod tests {
     use crate::cache::{ExprCacheMode, mmap_expr_bin, write_expr_bin_with_mode};
     use crate::core::types::{ProxyKey, ProxyScores};
-    use crate::data::ExpressionSoA;
-    use crate::input::GeneIndex;
+    use crate::data::{ExpressionSoA, SoaIndex};
     use crate::score::AxisScoresVec;
 
     use super::{RedoxRegime, compute_redox_metrics};
@@ -298,7 +310,7 @@ mod tests {
         write_expr_bin_with_mode(&path, &soa, ExprCacheMode::Cell).expect("write");
         let view = mmap_expr_bin(&path).expect("mmap");
 
-        let index = GeneIndex::from_feature_list(&genes);
+        let index = SoaIndex::from_ordered(&genes);
         let axes = AxisScoresVec {
             bioenergetics: vec![0.3, 0.6, 0.9],
             ros: vec![0.2, 0.6, 0.8],
@@ -348,7 +360,7 @@ mod tests {
         write_expr_bin_with_mode(&path, &soa, ExprCacheMode::Cell).expect("write");
         let view = mmap_expr_bin(&path).expect("mmap");
 
-        let index = GeneIndex::from_feature_list(&genes);
+        let index = SoaIndex::from_ordered(&genes);
         let axes = AxisScoresVec {
             bioenergetics: vec![0.9, 0.7, 0.2],
             ros: vec![0.9, 0.7, 0.2],

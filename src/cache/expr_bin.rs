@@ -27,20 +27,27 @@ pub enum CacheError {
     },
 }
 
+/// Mmap-backed expression cache. `values()` borrows from `inner`; the
+/// `'a` lifetime parameter is kept for backwards source compatibility.
 #[derive(Debug)]
 pub struct ExpressionSoAView<'a> {
-    pub values: &'a [f32],
     pub genes: usize,
     pub samples: usize,
     pub mode: ExprCacheMode,
-    #[allow(dead_code)]
     inner: kira_shared_sc_cache::ExprBinMmap,
+    _marker: std::marker::PhantomData<&'a ()>,
 }
 
 impl<'a> ExpressionSoAView<'a> {
+    #[inline]
+    pub fn values(&self) -> &[f32] {
+        self.inner.values()
+    }
+
+    #[inline]
     pub fn get(&self, gene: usize, sample: usize) -> f32 {
         let idx = gene * self.samples + sample;
-        self.values[idx]
+        self.values()[idx]
     }
 }
 
@@ -62,14 +69,22 @@ pub fn mmap_expr_bin(path: &Path) -> Result<ExpressionSoAView<'static>, CacheErr
     let genes = inner.genes;
     let samples = inner.samples;
     let mode = inner.mode;
-    let values = inner.values();
-    let values_static: &'static [f32] = unsafe { std::mem::transmute(values) };
+
+    let expected = genes.saturating_mul(samples);
+    if inner.values().len() != expected {
+        return Err(CacheError::SizeMismatch {
+            path: path.to_path_buf(),
+            expected: expected.saturating_mul(std::mem::size_of::<f32>()),
+            actual: inner.values().len() * std::mem::size_of::<f32>(),
+        });
+    }
+
     Ok(ExpressionSoAView {
-        values: values_static,
         genes,
         samples,
         mode,
         inner,
+        _marker: std::marker::PhantomData,
     })
 }
 

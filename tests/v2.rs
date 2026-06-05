@@ -152,13 +152,14 @@ fn v2_disabled_matches_v1_proxies() {
     let resolved = dummy_resolved();
     let primitives = primitives_fixture();
     let v1 = compute_proxies_v1(&primitives, &resolved, &refs).expect("v1");
+    let v1_clone = v1.clone();
     let v2 = compute_proxies_v2(
         &primitives,
-        &v1,
+        v1,
         &refs_v2_fixture(),
         &OptionalOmicsInputs::default(),
     );
-    assert_eq!(v2.v1, v1);
+    assert_eq!(v2.v1, v1_clone);
     assert!(v2.v2_normalized.is_empty());
 }
 
@@ -176,7 +177,7 @@ fn mixing_corrections_apply() {
         proteomics_atp: Some(vec![0.8, 0.8]),
     };
     let refs_v2 = refs_v2_fixture();
-    let v2 = compute_proxies_v2(&primitives, &v1, &refs_v2, &extra);
+    let v2 = compute_proxies_v2(&primitives, v1, &refs_v2, &extra);
 
     let axes_v2 = compute_axes_v2(&v2, &weights_v2_fixture(), &refs_v2);
     let decay_v2 = compute_decay_v2(&axes_v2, &weights_v2_fixture());

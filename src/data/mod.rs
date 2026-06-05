@@ -5,5 +5,6 @@ pub mod soa;
 
 pub use aggregate::{AggregatedMatrix, AggregationMode, ClusterMap, aggregate, load_cluster_map};
 pub use soa::{
-    ExpressionSoA, PreparedExpression, prepare_expression, prepare_expression_with_clusters,
+    ExpressionSoA, PreparedExpression, SoaIndex, prepare_expression,
+    prepare_expression_with_clusters,
 };

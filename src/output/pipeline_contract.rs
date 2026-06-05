@@ -10,7 +10,7 @@ use serde::Serialize;
 use crate::input::ExpressionSource;
 use crate::metrics::metabolic_extension::aggregate::MetabolicSummary;
 use crate::metrics::metabolic_extension::scores::MetabolicMetrics;
-use crate::output::OutputError;
+use crate::output::{OutputError, buffered};
 use crate::output::profile::MitoProfileV1;
 use crate::redox::{RedoxMetrics, RedoxRegime};
 
@@ -108,6 +108,7 @@ pub fn write_summary_json_with_redox(
         path: path.clone(),
         source,
     })?;
+    let mut writer = buffered(file);
 
     let summary = SummaryJson {
         tool: "kira-mitoqc",
@@ -132,8 +133,15 @@ pub fn write_summary_json_with_redox(
         mitochondrial_metabolic: metabolic_summary,
     };
 
-    serde_json::to_writer_pretty(file, &summary)
-        .map_err(|source| OutputError::Serialize { path, source })?;
+    serde_json::to_writer_pretty(&mut writer, &summary).map_err(|source| {
+        OutputError::Serialize {
+            path: path.clone(),
+            source,
+        }
+    })?;
+    writer
+        .flush()
+        .map_err(|source| OutputError::WriteFile { path, source })?;
     Ok(())
 }
 
@@ -150,23 +158,25 @@ pub fn write_mito_metrics_tsv(
     })?;
 
     let path = out_dir.join("mito_metrics.tsv");
-    let mut file = File::create(&path).map_err(|source| OutputError::WriteFile {
+    let file = File::create(&path).map_err(|source| OutputError::WriteFile {
         path: path.clone(),
         source,
     })?;
+    let mut writer = buffered(file);
+    let map_err = |source| OutputError::WriteFile {
+        path: path.clone(),
+        source,
+    };
 
     writeln!(
-        file,
+        writer,
         "cell_id\tmitochondrial_state\tdecay_score\trobustness_margin\tbioenergetics\tros\tdynamics\tregulation\toxphos_core\tgly_core\tfao_core\tros_core\tbio_core\tMRI\tOSL\tESS\tMCB\tOGI\tmetabolic_rigid_high\tros_high\tenergetic_strain_high\tcompensation_failure"
     )
-    .map_err(|source| OutputError::WriteFile {
-        path: path.clone(),
-        source,
-    })?;
+    .map_err(map_err)?;
 
     for (sample, profile) in profiles.iter().enumerate() {
         writeln!(
-            file,
+            writer,
             "{}\t{}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{}\t{}\t{}\t{}",
             barcodes[sample],
             profile.mitochondrial_state,
@@ -203,12 +213,10 @@ pub fn write_mito_metrics_tsv(
                 .copied()
                 .unwrap_or(false)
         )
-        .map_err(|source| OutputError::WriteFile {
-            path: path.clone(),
-            source,
-        })?;
+        .map_err(map_err)?;
     }
 
+    writer.flush().map_err(map_err)?;
     Ok(())
 }
 
@@ -223,6 +231,7 @@ pub fn write_pipeline_step_json(out_dir: &Path, shared_cache: &str) -> Result<()
         path: path.clone(),
         source,
     })?;
+    let mut writer = buffered(file);
 
     let payload = PipelineStepJson {
         tool: "kira-mitoqc",
@@ -239,8 +248,15 @@ pub fn write_pipeline_step_json(out_dir: &Path, shared_cache: &str) -> Result<()
         },
         axes: ["bioenergetics", "ros", "dynamics", "regulation"],
     };
-    serde_json::to_writer_pretty(file, &payload)
-        .map_err(|source| OutputError::Serialize { path, source })?;
+    serde_json::to_writer_pretty(&mut writer, &payload).map_err(|source| {
+        OutputError::Serialize {
+            path: path.clone(),
+            source,
+        }
+    })?;
+    writer
+        .flush()
+        .map_err(|source| OutputError::WriteFile { path, source })?;
     Ok(())
 }
 

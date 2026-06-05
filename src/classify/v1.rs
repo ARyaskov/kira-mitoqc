@@ -1,5 +1,6 @@
 //! v1 rule-based classification.
 
+use rayon::prelude::*;
 use tracing::error;
 
 use crate::config::refs::RefsV1;
@@ -38,51 +39,46 @@ pub fn classify_v1_with_redox(
         assert_eq!(redox_metrics.redox_regime.len(), len);
     }
 
-    let mut states = Vec::with_capacity(len);
-    for i in 0..len {
-        if let Some(redox_metrics) = redox {
-            match redox_metrics.redox_regime[i] {
-                RedoxRegime::RedoxOverload => {
-                    states.push(MitochondrialState::RedoxOverload);
-                    continue;
+    let t = &refs.thresholds;
+
+    (0..len)
+        .into_par_iter()
+        .with_min_len(1024)
+        .map(|i| {
+            if let Some(redox_metrics) = redox {
+                match redox_metrics.redox_regime[i] {
+                    RedoxRegime::RedoxOverload => return MitochondrialState::RedoxOverload,
+                    RedoxRegime::UnbufferedOxidativeStress => {
+                        return MitochondrialState::UnbufferedOxidativeStress;
+                    }
+                    RedoxRegime::CompensatedOxidativeStress => {
+                        return MitochondrialState::CompensatedOxidativeStress;
+                    }
+                    RedoxRegime::Baseline => {}
                 }
-                RedoxRegime::UnbufferedOxidativeStress => {
-                    states.push(MitochondrialState::UnbufferedOxidativeStress);
-                    continue;
-                }
-                RedoxRegime::CompensatedOxidativeStress => {
-                    states.push(MitochondrialState::CompensatedOxidativeStress);
-                    continue;
-                }
-                RedoxRegime::Baseline => {}
             }
-        }
 
-        let bio = axes.bioenergetics[i];
-        let ros = axes.ros[i];
-        let dyns = axes.dynamics[i];
-        let reg = axes.regulation[i];
+            let bio = axes.bioenergetics[i];
+            let ros = axes.ros[i];
+            let dyns = axes.dynamics[i];
+            let reg = axes.regulation[i];
 
-        if bio.is_nan() || ros.is_nan() || dyns.is_nan() || reg.is_nan() {
-            error!(sample = i, "NaN encountered in classification");
-            states.push(MitochondrialState::CompensatedButFragile);
-            continue;
-        }
+            if bio.is_nan() || ros.is_nan() || dyns.is_nan() || reg.is_nan() {
+                error!(sample = i, "NaN encountered in classification");
+                return MitochondrialState::CompensatedButFragile;
+            }
 
-        if ros > refs.thresholds.ros_high && bio < refs.thresholds.bioenergetics_low {
-            states.push(MitochondrialState::RosDominantDecay);
-        } else if bio > refs.thresholds.bioenergetics_high {
-            states.push(MitochondrialState::BioenergeticCollapse);
-        } else if dyns > refs.thresholds.dynamics_high && reg < refs.thresholds.regulation_low {
-            states.push(MitochondrialState::MitophagyLockedDepletion);
-        } else if bio > refs.thresholds.structural_bio_min
-            && dyns > refs.thresholds.structural_dyn_min
-        {
-            states.push(MitochondrialState::StructuralFragmentation);
-        } else {
-            states.push(MitochondrialState::CompensatedButFragile);
-        }
-    }
-
-    states
+            if ros > t.ros_high && bio < t.bioenergetics_low {
+                MitochondrialState::RosDominantDecay
+            } else if bio > t.bioenergetics_high {
+                MitochondrialState::BioenergeticCollapse
+            } else if dyns > t.dynamics_high && reg < t.regulation_low {
+                MitochondrialState::MitophagyLockedDepletion
+            } else if bio > t.structural_bio_min && dyns > t.structural_dyn_min {
+                MitochondrialState::StructuralFragmentation
+            } else {
+                MitochondrialState::CompensatedButFragile
+            }
+        })
+        .collect()
 }

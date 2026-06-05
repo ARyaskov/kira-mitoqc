@@ -1,24 +1,32 @@
 //! Gene symbol to column index resolver.
 
-use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
+use rustc_hash::FxHashMap;
 use tracing::warn;
 
 use crate::core::types::GeneSet;
 use crate::input::InputError;
 
 /// Gene symbol to column index mapping.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default)]
 pub struct GeneIndex {
     /// Gene symbol -> column index in input matrix.
-    map: BTreeMap<String, usize>,
+    map: FxHashMap<String, usize>,
 }
+
+impl PartialEq for GeneIndex {
+    fn eq(&self, other: &Self) -> bool {
+        self.map == other.map
+    }
+}
+impl Eq for GeneIndex {}
 
 impl GeneIndex {
     /// Build from a list of feature symbols. First occurrence wins.
     pub fn from_feature_list(features: &[String]) -> Self {
-        let mut map = BTreeMap::new();
+        let mut map: FxHashMap<String, usize> =
+            FxHashMap::with_capacity_and_hasher(features.len(), Default::default());
         let mut duplicates = BTreeSet::new();
         for (idx, symbol) in features.iter().enumerate() {
             if map.contains_key(symbol) {

@@ -1,9 +1,10 @@
 use std::collections::BTreeSet;
 
+use rayon::prelude::*;
 use serde::Serialize;
 
 use crate::cache::ExpressionSoAView;
-use crate::input::{GeneIndex, ResolvedGeneSets};
+use crate::data::SoaIndex;
 use crate::metrics::metabolic_extension::panels::{
     BIOGENESIS_PANEL, FAO_PANEL, GLYCOLYSIS_PANEL, OXPHOS_PANEL, ROS_PANEL, panel_alias,
     to_mouse_like,
@@ -73,29 +74,15 @@ pub struct MetabolicMetrics {
 }
 
 pub fn compute_metabolic_metrics(
-    soa: &ExpressionSoAView,
-    gene_index: &GeneIndex,
-    resolved: &ResolvedGeneSets,
+    soa: &ExpressionSoAView<'_>,
+    soa_index: &SoaIndex,
     mito_stress_signal: &[f32],
 ) -> MetabolicMetrics {
-    let base = existing_gene_count(resolved);
-    let oxphos_rows = resolve_panel_rows(OXPHOS_PANEL, gene_index, base);
-    let gly_rows = resolve_panel_rows(GLYCOLYSIS_PANEL, gene_index, base + OXPHOS_PANEL.len());
-    let fao_rows = resolve_panel_rows(
-        FAO_PANEL,
-        gene_index,
-        base + OXPHOS_PANEL.len() + GLYCOLYSIS_PANEL.len(),
-    );
-    let ros_rows = resolve_panel_rows(
-        ROS_PANEL,
-        gene_index,
-        base + OXPHOS_PANEL.len() + GLYCOLYSIS_PANEL.len() + FAO_PANEL.len(),
-    );
-    let bio_rows = resolve_panel_rows(
-        BIOGENESIS_PANEL,
-        gene_index,
-        base + OXPHOS_PANEL.len() + GLYCOLYSIS_PANEL.len() + FAO_PANEL.len() + ROS_PANEL.len(),
-    );
+    let oxphos_rows = resolve_panel_rows(OXPHOS_PANEL, soa_index);
+    let gly_rows = resolve_panel_rows(GLYCOLYSIS_PANEL, soa_index);
+    let fao_rows = resolve_panel_rows(FAO_PANEL, soa_index);
+    let ros_rows = resolve_panel_rows(ROS_PANEL, soa_index);
+    let bio_rows = resolve_panel_rows(BIOGENESIS_PANEL, soa_index);
 
     let oxphos_core = panel_trimmed_mean(soa, &oxphos_rows);
     let gly_core = panel_trimmed_mean(soa, &gly_rows);
@@ -215,70 +202,54 @@ pub fn compute_metabolic_metrics(
     }
 }
 
-fn existing_gene_count(resolved: &ResolvedGeneSets) -> usize {
-    resolved.mtdna_complex_i.genes.len()
-        + resolved.mtdna_complex_iii.genes.len()
-        + resolved.mtdna_complex_iv.genes.len()
-        + resolved.mtdna_complex_v.genes.len()
-        + resolved.nuclear_oxphos_complex_i.genes.len()
-        + resolved.nuclear_oxphos_complex_ii.genes.len()
-        + resolved.nuclear_oxphos_complex_iii.genes.len()
-        + resolved.nuclear_oxphos_complex_iv.genes.len()
-        + resolved.nuclear_oxphos_complex_v.genes.len()
-        + resolved.ros.genes.len()
-        + resolved.mitophagy.genes.len()
-        + resolved.fusion.genes.len()
-        + resolved.fission.genes.len()
-        + resolved.biogenesis.genes.len()
-}
-
-fn resolve_panel_rows(panel: &[&str], gene_index: &GeneIndex, base_offset: usize) -> Vec<usize> {
+fn resolve_panel_rows(panel: &[&str], soa_index: &SoaIndex) -> Vec<usize> {
     let mut rows = Vec::with_capacity(panel.len());
     let mut seen = BTreeSet::new();
 
-    for (pos, symbol) in panel.iter().enumerate() {
-        let mut present = gene_index.get_index(symbol).is_some()
-            || gene_index.get_index(&to_mouse_like(symbol)).is_some();
+    for symbol in panel {
+        // Same fallback chain as SoA fill: exact → mouse → alias → mouse(alias).
+        let row = soa_index
+            .get(symbol)
+            .or_else(|| soa_index.get(&to_mouse_like(symbol)))
+            .or_else(|| panel_alias(symbol).and_then(|a| soa_index.get(a)))
+            .or_else(|| panel_alias(symbol).and_then(|a| soa_index.get(&to_mouse_like(a))));
 
-        if !present {
-            if let Some(alias) = panel_alias(symbol) {
-                present = gene_index.get_index(alias).is_some()
-                    || gene_index.get_index(&to_mouse_like(alias)).is_some();
-            }
-        }
-
-        if present {
-            let row = base_offset + pos;
-            if seen.insert(row) {
-                rows.push(row);
-            }
+        if let Some(row) = row
+            && seen.insert(row)
+        {
+            rows.push(row);
         }
     }
     rows
 }
 
-fn panel_trimmed_mean(soa: &ExpressionSoAView, rows: &[usize]) -> Vec<f32> {
+fn panel_trimmed_mean(soa: &ExpressionSoAView<'_>, rows: &[usize]) -> Vec<f32> {
     let n = soa.samples;
     let mut out = vec![f32::NAN; n];
     if rows.len() < MIN_GENES {
         return out;
     }
 
-    let mut buf = Vec::<f32>::with_capacity(rows.len());
-    for s in 0..n {
-        buf.clear();
-        for &g in rows {
-            let idx = g * n + s;
-            let v = soa.values[idx].max(0.0).ln_1p();
-            if v.is_finite() {
-                buf.push(v);
-            }
-        }
-        if buf.len() < MIN_GENES {
-            continue;
-        }
-        out[s] = trimmed_mean_in_place(&mut buf, TRIM_FRAC);
-    }
+    let values = soa.values();
+    let row_count = rows.len();
+    out.par_iter_mut()
+        .enumerate()
+        .with_min_len(1024)
+        .for_each_init(
+            || Vec::<f32>::with_capacity(row_count),
+            |buf, (s, slot)| {
+                buf.clear();
+                for &g in rows {
+                    let v = values[g * n + s].max(0.0).ln_1p();
+                    if v.is_finite() {
+                        buf.push(v);
+                    }
+                }
+                if buf.len() >= MIN_GENES {
+                    *slot = trimmed_mean_in_place(buf, TRIM_FRAC);
+                }
+            },
+        );
     out
 }
 

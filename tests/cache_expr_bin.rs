@@ -28,7 +28,7 @@ fn roundtrip_write_and_mmap() {
     let view = mmap_expr_bin(&path).expect("mmap cache");
     assert_eq!(view.genes, soa.genes);
     assert_eq!(view.samples, soa.samples);
-    assert_eq!(view.values, soa.values);
+    assert_eq!(view.values(), soa.values.as_slice());
     assert_eq!(view.get(1, 2), 6.0);
 }
 

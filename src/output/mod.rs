@@ -1,7 +1,7 @@
 //! Output writers for kira-mitoqc.
 
 use std::fs::{self, File};
-use std::io::Write;
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
@@ -14,6 +14,12 @@ use crate::score::{AxisScoresVec, DecayScoreVec};
 pub mod pipeline_contract;
 pub mod profile;
 pub mod v2;
+
+pub(crate) const WRITER_BUF: usize = 1 << 20;
+
+pub(crate) fn buffered<W: std::io::Write>(w: W) -> BufWriter<W> {
+    BufWriter::with_capacity(WRITER_BUF, w)
+}
 
 /// Output errors.
 #[derive(Debug, Error)]
@@ -48,8 +54,15 @@ pub fn write_json(out_dir: &Path, profiles: &[MitoProfileV1]) -> Result<(), Outp
         path: path.clone(),
         source,
     })?;
-    serde_json::to_writer_pretty(file, profiles)
-        .map_err(|source| OutputError::Serialize { path, source })?;
+    let mut writer = buffered(file);
+    serde_json::to_writer_pretty(&mut writer, profiles)
+        .map_err(|source| OutputError::Serialize {
+            path: path.clone(),
+            source,
+        })?;
+    writer
+        .flush()
+        .map_err(|source| OutputError::WriteFile { path, source })?;
     Ok(())
 }
 
@@ -64,30 +77,28 @@ pub fn write_axes_tsv(
         source,
     })?;
     let path = out_dir.join("axes.tsv");
-    let mut file = File::create(&path).map_err(|source| OutputError::WriteFile {
+    let file = File::create(&path).map_err(|source| OutputError::WriteFile {
         path: path.clone(),
         source,
     })?;
+    let mut writer = buffered(file);
+    let map_err = |source| OutputError::WriteFile {
+        path: path.clone(),
+        source,
+    };
 
-    writeln!(file, "cell_id\tbioenergetics\tros\tdynamics\tregulation").map_err(|source| {
-        OutputError::WriteFile {
-            path: path.clone(),
-            source,
-        }
-    })?;
+    writeln!(writer, "cell_id\tbioenergetics\tros\tdynamics\tregulation").map_err(map_err)?;
 
     for i in 0..axes.bioenergetics.len() {
         writeln!(
-            file,
+            writer,
             "{}\t{:.6}\t{:.6}\t{:.6}\t{:.6}",
             barcodes[i], axes.bioenergetics[i], axes.ros[i], axes.dynamics[i], axes.regulation[i]
         )
-        .map_err(|source| OutputError::WriteFile {
-            path: path.clone(),
-            source,
-        })?;
+        .map_err(map_err)?;
     }
 
+    writer.flush().map_err(map_err)?;
     Ok(())
 }
 
@@ -98,30 +109,28 @@ pub fn write_decay_tsv(out_dir: &Path, decay: &DecayScoreVec) -> Result<(), Outp
         source,
     })?;
     let path = out_dir.join("decay.tsv");
-    let mut file = File::create(&path).map_err(|source| OutputError::WriteFile {
+    let file = File::create(&path).map_err(|source| OutputError::WriteFile {
         path: path.clone(),
         source,
     })?;
+    let mut writer = buffered(file);
+    let map_err = |source| OutputError::WriteFile {
+        path: path.clone(),
+        source,
+    };
 
-    writeln!(file, "sample\tdecay_score\trobustness_margin").map_err(|source| {
-        OutputError::WriteFile {
-            path: path.clone(),
-            source,
-        }
-    })?;
+    writeln!(writer, "sample\tdecay_score\trobustness_margin").map_err(map_err)?;
 
     for i in 0..decay.decay.len() {
         writeln!(
-            file,
+            writer,
             "{}\t{:.6}\t{:.6}",
             i, decay.decay[i], decay.robustness_margin[i]
         )
-        .map_err(|source| OutputError::WriteFile {
-            path: path.clone(),
-            source,
-        })?;
+        .map_err(map_err)?;
     }
 
+    writer.flush().map_err(map_err)?;
     Ok(())
 }
 
@@ -132,10 +141,15 @@ pub fn write_proxies_tsv(out_dir: &Path, proxies: &ProxyScores) -> Result<(), Ou
         source,
     })?;
     let path = out_dir.join("proxies.tsv");
-    let mut file = File::create(&path).map_err(|source| OutputError::WriteFile {
+    let file = File::create(&path).map_err(|source| OutputError::WriteFile {
         path: path.clone(),
         source,
     })?;
+    let mut writer = buffered(file);
+    let map_err = |source| OutputError::WriteFile {
+        path: path.clone(),
+        source,
+    };
 
     let proxy_order = [
         ProxyKey::ETCStoichiometryLoss,
@@ -153,10 +167,7 @@ pub fn write_proxies_tsv(out_dir: &Path, proxies: &ProxyScores) -> Result<(), Ou
         .map(|k| k.as_str())
         .collect::<Vec<_>>()
         .join("\t");
-    writeln!(file, "sample\t{header}").map_err(|source| OutputError::WriteFile {
-        path: path.clone(),
-        source,
-    })?;
+    writeln!(writer, "sample\t{header}").map_err(map_err)?;
 
     let values = proxy_order
         .iter()
@@ -165,22 +176,14 @@ pub fn write_proxies_tsv(out_dir: &Path, proxies: &ProxyScores) -> Result<(), Ou
 
     let samples = values.first().map(|v| v.len()).unwrap_or(0);
     for i in 0..samples {
-        write!(file, "{}", i).map_err(|source| OutputError::WriteFile {
-            path: path.clone(),
-            source,
-        })?;
+        write!(writer, "{}", i).map_err(map_err)?;
         for vec in &values {
-            write!(file, "\t{:.6}", vec[i]).map_err(|source| OutputError::WriteFile {
-                path: path.clone(),
-                source,
-            })?;
+            write!(writer, "\t{:.6}", vec[i]).map_err(map_err)?;
         }
-        writeln!(file).map_err(|source| OutputError::WriteFile {
-            path: path.clone(),
-            source,
-        })?;
+        writeln!(writer).map_err(map_err)?;
     }
 
+    writer.flush().map_err(map_err)?;
     Ok(())
 }
 
@@ -198,8 +201,16 @@ pub fn write_json_v2(
         path: path.clone(),
         source,
     })?;
-    serde_json::to_writer_pretty(file, profiles)
-        .map_err(|source| OutputError::Serialize { path, source })?;
+    let mut writer = buffered(file);
+    serde_json::to_writer_pretty(&mut writer, profiles).map_err(|source| {
+        OutputError::Serialize {
+            path: path.clone(),
+            source,
+        }
+    })?;
+    writer
+        .flush()
+        .map_err(|source| OutputError::WriteFile { path, source })?;
     Ok(())
 }
 
@@ -214,23 +225,25 @@ pub fn write_redox_metrics_tsv(
         source,
     })?;
     let path = out_dir.join("mitochondrial_redox_metrics.tsv");
-    let mut file = File::create(&path).map_err(|source| OutputError::WriteFile {
+    let file = File::create(&path).map_err(|source| OutputError::WriteFile {
         path: path.clone(),
         source,
     })?;
+    let mut writer = buffered(file);
+    let map_err = |source| OutputError::WriteFile {
+        path: path.clone(),
+        source,
+    };
 
     writeln!(
-        file,
+        writer,
         "cell_id\tmito_oxidative_stress_index\tredox_buffering_capacity\tmito_redox_mismatch\tmitochondrial_stress_adaptation_score\tredox_regime"
     )
-    .map_err(|source| OutputError::WriteFile {
-        path: path.clone(),
-        source,
-    })?;
+    .map_err(map_err)?;
 
     for i in 0..barcodes.len() {
         writeln!(
-            file,
+            writer,
             "{}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{}",
             barcodes[i],
             redox.mito_oxidative_stress_index[i],
@@ -239,11 +252,9 @@ pub fn write_redox_metrics_tsv(
             redox.mitochondrial_stress_adaptation_score[i],
             redox.redox_regime[i].as_str(),
         )
-        .map_err(|source| OutputError::WriteFile {
-            path: path.clone(),
-            source,
-        })?;
+        .map_err(map_err)?;
     }
 
+    writer.flush().map_err(map_err)?;
     Ok(())
 }

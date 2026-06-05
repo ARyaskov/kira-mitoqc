@@ -35,8 +35,18 @@ pub fn load_h5ad(path: &Path, gene_symbol_key: Option<&str>) -> Result<H5adInput
 
     let matrix = CsMat::new_csc(
         (canonical.matrix.n_genes, canonical.matrix.n_cells),
-        canonical.matrix.col_ptr,
-        canonical.matrix.row_idx,
+        canonical
+            .matrix
+            .col_ptr
+            .into_iter()
+            .map(|v| v as usize)
+            .collect::<Vec<_>>(),
+        canonical
+            .matrix
+            .row_idx
+            .into_iter()
+            .map(|v| v as usize)
+            .collect::<Vec<_>>(),
         canonical.matrix.values,
     );
 
@@ -72,7 +82,7 @@ pub fn load_h5ad_clusters(path: &Path, column: &str) -> Result<ClusterMap, Input
         path: path.to_path_buf(),
         source,
     })?;
-    let barcodes = read_strings(&file, "obs/_index")?;
+    let barcodes = read_obs_index(&file)?;
     let labels = read_strings(&file, &format!("obs/{column}"))?;
     if labels.len() != barcodes.len() {
         return Err(InputError::InvalidClusterFile {
@@ -83,13 +93,28 @@ pub fn load_h5ad_clusters(path: &Path, column: &str) -> Result<ClusterMap, Input
     Ok(build_cluster_map(&barcodes, &labels))
 }
 
+/// Read the obs index, trying conventional names used by different writers.
+fn read_obs_index(file: &File) -> Result<Vec<String>, InputError> {
+    // Scanpy historically writes `obs/_index`; some toolkits use `obs/index`
+    // or per-dataset columns. Try them in priority order before giving up.
+    for candidate in ["obs/_index", "obs/index", "obs/barcode", "obs/cell_id"] {
+        if file.dataset(candidate).is_ok() {
+            return read_strings(file, candidate);
+        }
+    }
+    Err(InputError::MissingH5adDataset {
+        path: "obs/_index (or alias)".to_string(),
+    })
+}
+
+/// Allowlist of well-known column names; arbitrary keys are accepted but
+/// non-empty values are flagged as user error early.
 fn validate_gene_symbol_key(gene_symbol_key: Option<&str>) -> Result<(), InputError> {
     if let Some(key) = gene_symbol_key
-        && key != "gene_symbols"
-        && key != "_index"
+        && key.is_empty()
     {
         return Err(InputError::InvalidGeneSymbolKey {
-            key: key.to_string(),
+            key: String::new(),
         });
     }
     Ok(())

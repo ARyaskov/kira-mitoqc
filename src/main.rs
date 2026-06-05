@@ -9,7 +9,9 @@ use kira_mitoqc::compute::compute_primitives;
 use kira_mitoqc::config::ConfigV1;
 use kira_mitoqc::config::refs_v2::{load_refs_v2, load_refs_v2_embedded};
 use kira_mitoqc::config::weights_v2::{load_weights_v2, load_weights_v2_embedded};
-use kira_mitoqc::data::{AggregationMode, load_cluster_map, prepare_expression_with_clusters};
+use kira_mitoqc::data::{
+    AggregationMode, SoaIndex, load_cluster_map, prepare_expression_with_clusters,
+};
 use kira_mitoqc::explain::explain_v1;
 use kira_mitoqc::input::bd_rhapsody::{
     compute_mito_fraction_from_file, load_bd_rhapsody, load_bd_rhapsody_metadata,
@@ -167,11 +169,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let gene_symbol_col = args.gene_symbol_col.map(|v| v.saturating_sub(1));
 
+            // Recognize .h5ad (and .h5ad.gz). Falling back on extension keeps
+            // the CLI usable when the file is missing/inaccessible at this
+            // point; deeper detection happens inside kira-scio.
             let is_h5ad = args
                 .input
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .map(|ext| ext.eq_ignore_ascii_case("h5ad"))
+                .file_name()
+                .and_then(|f| f.to_str())
+                .map(|name| {
+                    let lower = name.to_ascii_lowercase();
+                    lower.ends_with(".h5ad") || lower.ends_with(".h5ad.gz")
+                })
                 .unwrap_or(false);
 
             let detected_input = if is_h5ad {
@@ -506,14 +514,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             info!("Computing axes and decay");
             let scored = score_profile_v1(&proxies, &config.weights);
+
+            // SoA-space index: maps gene symbols to their row in the
+            // prepared SoA (not to be confused with `gene_index`, which
+            // indexes the input feature list).
+            let soa_index = SoaIndex::from_resolved(&resolved);
+
             let metabolic_metrics =
-                compute_metabolic_metrics(&view, &gene_index, &resolved, &scored.axes.ros);
+                compute_metabolic_metrics(&view, &soa_index, &scored.axes.ros);
 
             info!("Computing redox extension stage");
             let redox_metrics = if args.redox {
                 Some(compute_redox_metrics(
                     &view,
-                    &gene_index,
+                    &soa_index,
                     &scored.axes,
                     &proxies,
                 )?)
@@ -618,7 +632,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     proteomics_atp: read_vec_file(args.proteomics_atp.as_ref())?,
                 };
 
-                let proxies_v2 = compute_proxies_v2(&primitives, &proxies, &refs_v2, &omics);
+                // `proxies` is no longer needed past this point — move it into
+                // compute_proxies_v2 to avoid cloning all 8 per-sample vectors.
+                let proxies_v2 = compute_proxies_v2(&primitives, proxies, &refs_v2, &omics);
                 let axes_v2 = compute_axes_v2(&proxies_v2, &weights_v2, &refs_v2);
                 let decay_v2 = compute_decay_v2(&axes_v2, &weights_v2);
                 let v2_profiles = assemble_profiles_v2(&profiles, &axes_v2, &decay_v2, &proxies_v2);
@@ -706,8 +722,9 @@ pub fn geneset_overlap_hits(
     features: &[String],
     geneset: &kira_mitoqc::core::types::GeneSet,
 ) -> usize {
-    let feature_set: std::collections::BTreeSet<&str> =
-        features.iter().map(std::string::String::as_str).collect();
+    let mut feature_set: rustc_hash::FxHashSet<&str> =
+        rustc_hash::FxHashSet::with_capacity_and_hasher(features.len(), Default::default());
+    feature_set.extend(features.iter().map(String::as_str));
 
     let mut hit_count = 0usize;
     for gene in geneset.all_mtdna() {
@@ -749,12 +766,15 @@ pub fn geneset_overlap_hits(
 }
 
 fn read_vec_file(path: Option<&PathBuf>) -> Result<Option<Vec<f32>>, Box<dyn std::error::Error>> {
+    use std::io::{BufRead, BufReader};
     let Some(path) = path else {
         return Ok(None);
     };
-    let contents = std::fs::read_to_string(path)?;
+    let file = std::fs::File::open(path)?;
+    let reader = BufReader::new(file);
     let mut values = Vec::new();
-    for (line_no, line) in contents.lines().enumerate() {
+    for (line_no, line) in reader.lines().enumerate() {
+        let line = line?;
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;

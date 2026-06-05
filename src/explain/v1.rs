@@ -1,5 +1,6 @@
 //! v1 explainability implementation.
 
+use rayon::prelude::*;
 use tracing::error;
 
 use crate::config::weights::WeightsV1;
@@ -34,17 +35,18 @@ pub fn explain_v1(
         ProxyKey::BiogenesisFailure,
     ];
 
-    let mut outputs = Vec::with_capacity(len);
-    for i in 0..len {
-        let drivers = compute_drivers_for_sample(i, proxies, weights, &proxy_order);
-        let interpretation = build_interpretation(i, axes, states[i]);
-        outputs.push(Explainability {
-            drivers,
-            interpretation,
-        });
-    }
-
-    outputs
+    (0..len)
+        .into_par_iter()
+        .with_min_len(1024)
+        .map(|i| {
+            let drivers = compute_drivers_for_sample(i, proxies, weights, &proxy_order);
+            let interpretation = build_interpretation(i, axes, states[i]);
+            Explainability {
+                drivers,
+                interpretation,
+            }
+        })
+        .collect()
 }
 
 fn compute_drivers_for_sample(
