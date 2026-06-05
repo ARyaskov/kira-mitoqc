@@ -19,3 +19,5 @@ target/
 out/
 data/
 generated/
+.claude/
+.cursor/
